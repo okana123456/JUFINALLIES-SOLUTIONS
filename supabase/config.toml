@@ -1,0 +1,22 @@
+project_id = "iemucoenarynzybowciu"
+
+[functions.register-jufinallies-business]
+verify_jwt = false
+
+[functions.jufinallies-c2b-validation-v1]
+verify_jwt = false
+
+[functions.jufinallies-c2b-confirmation-v1]
+verify_jwt = false
+
+[functions.register-daraja]
+verify_jwt = false
+
+[functions.service-payment-callback]
+verify_jwt = false
+
+[functions.service-daraja-diagnostics]
+verify_jwt = false
+
+[functions.start-service-payment]
+verify_jwt = true
