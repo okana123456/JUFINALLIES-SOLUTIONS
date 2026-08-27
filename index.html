@@ -367,7 +367,7 @@ tr:hover{background:rgba(37,99,235,.04)}
 
 <script>
 // ═══ SUPABASE INIT ═══
-const APP_VERSION = 'jufinallies-2026-08-27-launch-v1';
+const APP_VERSION = 'jufinallies-2026-08-27-october-billing-v2';
 const SUPABASE_URL = 'https://iemucoenarynzybowciu.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImllbXVjb2VuYXJ5bnp5Ym93Y2l1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4MTgyNTUsImV4cCI6MjEwMzM5NDI1NX0.tMRFRXn9aRROrugZ2RsefipgWeArh3tvlL7CcuaG7kU';
 // Added custom storageKey to prevent GoTrue orphaned lock hanging in the browser.
@@ -388,9 +388,10 @@ let charts = {};
 let appSettings = null;
 let serviceBilling = { status:'unknown', paid:false, locked:false, reminder:false, pending:false, cycleMonth:null, checkedAt:null };
 let emailLoginInProgress = false;
+let emailConfirmationHandled = false;
 const SERVICE_BILLING_AMOUNT = 3000;
-const SERVICE_BILLING_FIRST_REMINDER_DATE = '2026-08-02';
-const SERVICE_BILLING_REMINDER_DAY = 2;
+const SERVICE_BILLING_START_DATE = '2026-10-01';
+const SERVICE_BILLING_REMINDER_DAY = 1;
 const SERVICE_BILLING_LOCK_DAY = 4;
 
 async function refreshJufinalliesBrowserCache(){
@@ -916,7 +917,7 @@ function serviceBillingDueDate(){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(SERVICE_BILLING_LOCK_DAY).padStart(2,'0')}`;
 }
 function isBeforeServiceBillingStart(){
-  return localISODate() < SERVICE_BILLING_FIRST_REMINDER_DATE;
+  return localISODate() < SERVICE_BILLING_START_DATE;
 }
 function isServiceBillingUser(){
   return !!currentUser && hasRole('admin','branch_manager');
@@ -1233,6 +1234,33 @@ function switchAuthTab(tab){
   else if(tab==='forgot')$('#panelForgot').style.display='block';
 }
 
+function authCallbackType(){
+  const queryType = new URLSearchParams(window.location.search).get('type');
+  const hashType = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('type');
+  return String(queryType || hashType || '').toLowerCase();
+}
+
+function isEmailConfirmationCallback(){
+  return ['signup','email','email_change'].includes(authCallbackType());
+}
+
+async function finishEmailConfirmation(session=null){
+  if(emailConfirmationHandled) return;
+  emailConfirmationHandled = true;
+  const confirmedEmail = session?.user?.email || '';
+  currentUser = null;
+  localStorage.removeItem('jufinallies_current_user');
+  localStorage.removeItem('jufinallies_last_activity');
+  removeServiceBillingOverlay();
+  try{ await supabaseClient.auth.signOut(); }catch(_){ }
+  window.history.replaceState(null, '', window.location.pathname);
+  $('#appShell').style.display='none';
+  $('#loginScreen').style.display='flex';
+  switchAuthTab('signin');
+  if(confirmedEmail) $('#loginEmail').value = confirmedEmail;
+  toast('Email confirmed successfully. Sign in with the password you created.', 'success');
+}
+
 function showForgotPassword(e){
   if(e)e.preventDefault();
   switchAuthTab('forgot');
@@ -1534,6 +1562,10 @@ async function checkAuthSession(){
   // Honor session timeout up-front
   if(checkSessionTimeout()) return false;
   const{data:{session}}=await supabaseClient.auth.getSession();
+  if(isEmailConfirmationCallback()){
+    await finishEmailConfirmation(session);
+    return false;
+  }
   if(session?.user){
     // DO NOT resolve roles and log them in if doing password recovery
     if (window.location.hash.includes('type=recovery')) {
@@ -1741,7 +1773,9 @@ supabaseClient.auth.onAuthStateChange((event,session)=>{
   }
   else if(event==='SIGNED_IN'&&session?.user&&!currentUser&&!emailLoginInProgress){
     setTimeout(async()=>{
-      if (!window.location.hash.includes('type=recovery') && !currentUser) {
+      if(isEmailConfirmationCallback()){
+        await finishEmailConfirmation(session);
+      }else if (!window.location.hash.includes('type=recovery') && !currentUser) {
         await resolveUserRole(session.user);
       }
     },0);

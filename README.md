@@ -30,6 +30,20 @@ JUFINALLIES_SERVICE_ROLE_KEY
 JUFINALLIES_REGISTRATION_KEY
 ```
 
+Platform subscription billing begins on 1 October 2026. Its STK payment flow uses these additional secrets:
+
+```text
+SERVICE_BILLING_AMOUNT=3000
+SERVICE_BILLING_START_DATE=2026-10-01
+SERVICE_CONSUMER_KEY
+SERVICE_CONSUMER_SECRET
+SERVICE_PASSKEY
+SERVICE_SHORTCODE
+SERVICE_TRANSACTION_TYPE=CustomerPayBillOnline
+SERVICE_DARAJA_ENVIRONMENT=production
+SERVICE_CALLBACK_URL=https://iemucoenarynzybowciu.supabase.co/functions/v1/service-payment-callback
+```
+
 Unique Daraja callbacks:
 
 ```text
@@ -37,7 +51,7 @@ https://iemucoenarynzybowciu.supabase.co/functions/v1/jufinallies-c2b-validation
 https://iemucoenarynzybowciu.supabase.co/functions/v1/jufinallies-c2b-confirmation-v1
 ```
 
-The Consumer Key and Consumer Secret are entered by the business administrator in Settings and are stored in the backend-only `jufinallies_daraja_credentials` table.
+For customer loan repayments, the business administrator enters the business PayBill shortcode, Consumer Key, Consumer Secret and environment in Settings. These are stored in the backend-only `jufinallies_daraja_credentials` table and use the unique C2B callbacks above. The `SERVICE_*` secrets are separate platform-owner credentials used only to collect Jufinallies monthly subscriptions through STK Push.
 
 ## Local Preview
 

@@ -36,6 +36,17 @@ function billingMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
+function kenyaISODate() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ ok: false, message: "Use POST" }, 405);
@@ -47,6 +58,16 @@ serve(async (req) => {
     const cleanPhone = normalizePhone(phone);
     if (!/^254(7|1)\d{8}$/.test(cleanPhone)) {
       return json({ ok: false, message: "Enter a valid Safaricom phone number." }, 400);
+    }
+
+    const billingStartsOn = String(Deno.env.get("SERVICE_BILLING_START_DATE") || "2026-10-01").trim();
+    if (kenyaISODate() < billingStartsOn) {
+      return json({
+        ok: false,
+        trial_active: true,
+        billing_starts_on: billingStartsOn,
+        message: `Jufinallies is on free trial until ${billingStartsOn}. No subscription payment is required yet.`,
+      }, 400);
     }
 
     const supabaseUrl = Deno.env.get("JUFINALLIES_PROJECT_URL") || "";
@@ -94,7 +115,7 @@ serve(async (req) => {
 
     const ts = timestamp();
     const callbackUrl = Deno.env.get("SERVICE_CALLBACK_URL") || `${supabaseUrl}/functions/v1/service-payment-callback`;
-    const accountReference = `PATA${String(staff.business_id).replace(/[^a-z0-9]/gi, "").slice(-7).toUpperCase()}`.slice(0, 12);
+    const accountReference = `JUFI${String(staff.business_id).replace(/[^a-z0-9]/gi, "").slice(-7).toUpperCase()}`.slice(0, 12);
     const payload = {
       BusinessShortCode: Number(shortcode),
       Password: btoa(`${shortcode}${passkey}${ts}`),
