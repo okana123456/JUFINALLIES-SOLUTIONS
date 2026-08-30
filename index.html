@@ -3662,7 +3662,7 @@ function openBulkDisbursementModal(){
     <h2>Bulk Disbursement</h2>
     <div class="card" style="margin-bottom:14px;background:rgba(139,92,246,0.08);border-color:rgba(139,92,246,0.25)">
       <p><strong>${selected.length} approved application${selected.length===1?'':'s'}</strong> selected</p>
-      <p style="font-size:12px;color:var(--text-secondary);margin-top:4px">Total principal to release: <strong>${fmtMoney(total)}</strong>. Each client's upfront fee balance will be checked separately before disbursement.</p>
+      <p style="font-size:12px;color:var(--text-secondary);margin-top:4px">Total principal to release: <strong>${fmtMoney(total)}</strong>. Upfront fees will be marked as paid automatically during disbursement.</p>
     </div>
     <div class="table-wrap" style="max-height:220px;overflow-y:auto;margin-bottom:14px"><table><thead><tr><th>Client</th><th>ID Number</th><th>Phone</th><th>Application</th><th>Amount</th></tr></thead><tbody>
       ${selected.map(a=>`<tr><td>${escapeHtml(a.loan_clients?.full_name||'-')}</td><td>${escapeHtml(a.loan_clients?.id_number||'-')}</td><td>${escapeHtml(a.loan_clients?.phone||'-')}</td><td>${escapeHtml(a.application_no||'-')}</td><td>${fmtMoney(a.applied_amount)}</td></tr>`).join('')}
@@ -3673,7 +3673,7 @@ function openBulkDisbursementModal(){
     </div>
     <label style="display:flex;align-items:flex-start;gap:8px;padding:11px 12px;margin-bottom:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);cursor:pointer">
       <input type="checkbox" id="bulkHistoricalLoan" onchange="toggleBulkHistoricalDisbursement()">
-      <span><strong>Existing / Historical Loans</strong><br><span style="font-size:11px;color:var(--text-secondary)">Use each application's recorded date as its loan date and automatically record its upfront fees as already paid.</span></span>
+      <span><strong>Existing / Historical Loans</strong><br><span style="font-size:11px;color:var(--text-secondary)">Use each application's recorded date as its loan date. Upfront fees are still settled automatically.</span></span>
     </label>
     <div class="form-group"><label>Reference Prefix / Batch Note</label><input class="input" id="bulkDisbRef" placeholder="e.g. M-Pesa batch or voucher reference"></div>
     <div class="form-group"><label>Fee Deduction Note</label><input class="input" id="bulkDisbFeeRef" placeholder="Optional note applied to all selected loans"></div>
@@ -3763,7 +3763,7 @@ async function openDisburseModal(appId){
     </div>
     <label style="display:flex;align-items:flex-start;gap:8px;padding:11px 12px;margin-bottom:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);cursor:pointer">
       <input type="checkbox" id="dHistoricalLoan" onchange="toggleHistoricalLoanOnboarding('${historicalApplicationDate}',${feeShortfall},${requiredFees})">
-      <span><strong>Existing / Historical Loan</strong><br><span style="font-size:11px;color:var(--text-secondary)">Uses the application date (${fmtDate(historicalApplicationDate)}) as the loan date and records all required upfront fees as already paid.</span></span>
+      <span><strong>Existing / Historical Loan</strong><br><span style="font-size:11px;color:var(--text-secondary)">Uses the application date (${fmtDate(historicalApplicationDate)}) as the loan date. Upfront fees are settled automatically for every disbursement.</span></span>
     </label>
     <div class="form-row"><div class="form-group"><label>Approved Loan Amount</label><input class="input" type="number" id="dAmt" value="${amt}"></div><div class="form-group"><label>Disbursement Method</label><select class="select" id="dMethod"><option value="cash">Cash</option><option value="mpesa" selected>M-Pesa</option><option value="bank_transfer">Bank Transfer</option></select></div></div>
     <div class="form-row"><div class="form-group"><label>Reference / Txn Code</label><input class="input" id="dRef"></div><div class="form-group"><label>Disbursement Date</label><input class="input" type="date" id="dDate" value="${defaultDisbDate}" max="${today()}" onchange="updateDisbursementFirstRepayment(1)"></div></div>
@@ -3777,16 +3777,14 @@ async function openDisburseModal(appId){
       <hr style="border:none;border-top:1px solid var(--border);margin:6px 0">
       <p style="display:flex;justify-content:space-between"><span>${calc.installmentLabel}</span><strong>${fmtMoney(calc.weekly)}</strong></p>
       <p style="display:flex;justify-content:space-between;font-size:15px"><span><strong>Amount to Release</strong></span><strong style="color:var(--accent-green)">${fmtMoney(netDisbursement)}</strong></p>
-      <p style="font-size:10px;color:var(--text-secondary);margin-top:4px">Upfront fees required before disbursement: ${fmtMoney(requiredFees)}. The released loan amount remains the approved principal.</p>
+      <p style="font-size:10px;color:var(--text-secondary);margin-top:4px">Upfront fees for this loan: ${fmtMoney(requiredFees)}. The system will mark them paid and deduct them automatically; the released loan amount remains the approved principal.</p>
     </div>
-    <div class="card" id="dFeeStatusCard" style="margin-top:12px;border-color:${feeShortfall>0?'var(--accent-red)':'var(--accent-green)'};background:${feeShortfall>0?'rgba(220,38,38,0.06)':'rgba(5,150,105,0.06)'}">
-      <p style="display:flex;justify-content:space-between"><span>Client Charges Account Balance</span><strong style="color:${feeShortfall>0?'var(--accent-red)':'var(--accent-green)'}">${fmtMoney(walletBalance)}</strong></p>
-      <div id="dFeeStatusText">${feeShortfall>0
-        ?`<p style="font-size:12px;color:var(--accent-red);margin-top:5px">The client needs ${fmtMoney(feeShortfall)} more before this loan can be disbursed.</p><button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="closeModal();navigateTo('charges_excess');setTimeout(()=>openClientChargePaymentModal('${app.client_id}'),250)">Record Charge Payment</button>`
-        :`<p style="font-size:12px;color:var(--accent-green);margin-top:5px">Sufficient balance. ${fmtMoney(requiredFees)} will be deducted automatically during disbursement.</p>`}</div>
+    <div class="card" id="dFeeStatusCard" style="margin-top:12px;border-color:var(--accent-green);background:rgba(5,150,105,0.06)">
+      <p style="display:flex;justify-content:space-between"><span>Client Charges Account Balance</span><strong style="color:var(--accent-green)">${fmtMoney(walletBalance)}</strong></p>
+      <div id="dFeeStatusText"><p style="font-size:12px;color:var(--accent-green);margin-top:5px">${feeShortfall>0?`${fmtMoney(feeShortfall)} will be auto-recorded as paid, then `:''}${fmtMoney(requiredFees)} will be deducted automatically during disbursement.</p></div>
     </div>
     <div class="form-group"><label>Fee Deduction Reference / Note</label><input class="input" id="dFeeRef" placeholder="Optional note for this deduction"></div>
-    <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="btnConfirmDisburse" onclick="confirmDisburse('${appId}','${app.client_id}','${app.applied_term_weeks}')" ${feeShortfall>0?'disabled':''}>${feeShortfall>0?'Insufficient Charges Balance':'Confirm & Disburse'}</button></div>
+    <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="btnConfirmDisburse" onclick="confirmDisburse('${appId}','${app.client_id}','${app.applied_term_weeks}')">Confirm & Disburse</button></div>
   `,true);
 }
 
@@ -3802,14 +3800,12 @@ function toggleHistoricalLoanOnboarding(applicationDate,feeShortfall,requiredFee
   }
   if(disbInput)disbInput.disabled=historical;
   if(button){
-    button.disabled=!historical&&Number(feeShortfall||0)>0;
-    button.textContent=historical?'Record Historical Loan':(Number(feeShortfall||0)>0?'Insufficient Charges Balance':'Confirm & Disburse');
+    button.disabled=false;
+    button.textContent=historical?'Record Historical Loan':'Confirm & Disburse';
   }
-  if(card){card.style.borderColor=historical?'var(--accent-blue)':(Number(feeShortfall||0)>0?'var(--accent-red)':'var(--accent-green)');}
-  if(status&&historical)status.innerHTML='<p style="font-size:12px;color:var(--accent-blue);margin-top:5px">Historical mode will automatically record and consume the required upfront fees. No additional charge entry is needed.</p>';
-  if(status&&!historical)status.innerHTML=Number(feeShortfall||0)>0
-    ?`<p style="font-size:12px;color:var(--accent-red);margin-top:5px">The client needs ${fmtMoney(Number(feeShortfall||0))} more before this loan can be disbursed.</p>`
-    :`<p style="font-size:12px;color:var(--accent-green);margin-top:5px">Sufficient balance. ${fmtMoney(Number(requiredFees||0))} will be deducted automatically during disbursement.</p>`;
+  if(card){card.style.borderColor=historical?'var(--accent-blue)':'var(--accent-green)';}
+  if(status&&historical)status.innerHTML='<p style="font-size:12px;color:var(--accent-blue);margin-top:5px">Historical mode will use the application date. Upfront fees will be settled automatically.</p>';
+  if(status&&!historical)status.innerHTML=`<p style="font-size:12px;color:var(--accent-green);margin-top:5px">${Number(feeShortfall||0)>0?`${fmtMoney(Number(feeShortfall||0))} will be auto-recorded as paid, then `:''}${fmtMoney(Number(requiredFees||0))} will be deducted automatically during disbursement.</p>`;
 }
 
 function updateDisbursementFirstRepayment(intervalWeeks=1){
@@ -3890,21 +3886,19 @@ async function disburseApprovedApplication(options){
     if(lErr)throw lErr;
 
     let walletUse;
-    let historicalFeeSourceKey='';
+    let autoFeeSourceKey='';
     try{
-      if(historicalOnboarding){
-        const requiredFees=Number((procFee+loanFormFee+creditReportFee).toFixed(2));
-        const existingFeeBalance=Number(await getClientChargeWalletBalance(clientId)||0);
-        const historicalFeeShortfall=Number(Math.max(0,requiredFees-existingFeeBalance).toFixed(2));
-        if(historicalFeeShortfall>0){
-          historicalFeeSourceKey=`historical-fees:${loan.id}`;
-          const{error:historicalFeeError}=await supabaseClient.rpc('jufinallies_deposit_client_charge',{
-            p_client_id:clientId,p_amount:historicalFeeShortfall,p_transaction_type:'deposit',p_charge_type:'other',
-            p_transaction_date:disbDate,p_reference:`HIST-FEE-${loanNo}`,p_payment_method:'historical',
-            p_description:'Historical loan onboarding - upfront fees previously paid',p_source_key:historicalFeeSourceKey
-          });
-          if(historicalFeeError)throw historicalFeeError;
-        }
+      const requiredFees=Number((procFee+loanFormFee+creditReportFee).toFixed(2));
+      const existingFeeBalance=Number(await getClientChargeWalletBalance(clientId)||0);
+      const feeShortfall=Number(Math.max(0,requiredFees-existingFeeBalance).toFixed(2));
+      if(feeShortfall>0){
+        autoFeeSourceKey=`auto-upfront-fees:${loan.id}`;
+        const{error:autoFeeError}=await supabaseClient.rpc('jufinallies_deposit_client_charge',{
+          p_client_id:clientId,p_amount:feeShortfall,p_transaction_type:'deposit',p_charge_type:'other',
+          p_transaction_date:disbDate,p_reference:`AUTO-FEE-${loanNo}`,p_payment_method:'system',
+          p_description:`Upfront fees assumed paid at disbursement${historicalOnboarding?' - historical onboarding':''}`,p_source_key:autoFeeSourceKey
+        });
+        if(autoFeeError)throw autoFeeError;
       }
       walletUse=await consumeClientChargeWallet({
         clientId,
@@ -3916,12 +3910,12 @@ async function disburseApprovedApplication(options){
         reference:feeRef||loanNo
       });
     }catch(walletErr){
-      if(historicalFeeSourceKey)await sb('client_charge_transactions').delete().eq('business_id',currentUser?.business_id).eq('source_key',historicalFeeSourceKey);
+      if(autoFeeSourceKey)await sb('client_charge_transactions').delete().eq('business_id',currentUser?.business_id).eq('source_key',autoFeeSourceKey);
       await sb('loans').delete().eq('id',loan.id).eq('business_id',currentUser?.business_id);
       throw walletErr;
     }
     if(!walletUse?.ok){
-      if(historicalFeeSourceKey)await sb('client_charge_transactions').delete().eq('business_id',currentUser?.business_id).eq('source_key',historicalFeeSourceKey);
+      if(autoFeeSourceKey)await sb('client_charge_transactions').delete().eq('business_id',currentUser?.business_id).eq('source_key',autoFeeSourceKey);
       await sb('loans').delete().eq('id',loan.id).eq('business_id',currentUser?.business_id);
       throw new Error(`Disbursement blocked. The client needs ${fmtMoney(walletUse?.shortfall||0)} more in the Charges Account.`);
     }
@@ -3968,7 +3962,7 @@ async function disburseApprovedApplication(options){
       ]);
     }catch(feeErr){ console.warn('[Disburse] Upfront fee income log failed:',feeErr?.message); }
 
-    await audit('loan_disbursed','loans',loan.id,null,{...loanRec,historical_onboarding:historicalOnboarding,upfront_fees_assumed_paid:historicalOnboarding});
+    await audit('loan_disbursed','loans',loan.id,null,{...loanRec,historical_onboarding:historicalOnboarding,upfront_fees_assumed_paid:true});
     return loan;
 }
 

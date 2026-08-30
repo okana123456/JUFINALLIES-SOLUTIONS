@@ -131,7 +131,7 @@ where l.id=st.loan_id;
 insert into public.loan_audit_log (
   business_id,user_id,action,table_name,record_id,new_value
 )
-select distinct a.business_id,null,'historical_schedule_dates_realigned','loans',a.loan_id::text,
+select distinct a.business_id,null::uuid,'historical_schedule_dates_realigned','loans',a.loan_id::text,
   jsonb_build_object('basis','application_date','first_due_offset_days',7,'fixed_at',now())
 from public.jufinallies_schedule_date_fix_audit a
 where not exists (
