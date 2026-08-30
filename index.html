@@ -6387,7 +6387,9 @@ async function loadChargesExcessAccountData(){
     const isCredit=['deposit','excess_deposit','adjustment_credit','transfer_in'].includes(tx.transaction_type);
     const isExcess=tx.transaction_type==='excess_deposit'||tx.charge_type==='excess';
     const isDebit=['fee_debit','adjustment_debit','refund_debit','transfer_out','loan_transfer_debit'].includes(tx.transaction_type);
-    const type=tx.transaction_type==='refund_debit'?'Refund / Reversal'
+    const isAutoUpfrontFee=String(tx.source_key||'').startsWith('auto-upfront-fees:');
+    const type=isAutoUpfrontFee?'Upfront Fees Auto-Settled'
+      :tx.transaction_type==='refund_debit'?'Refund / Reversal'
       :tx.transaction_type==='transfer_out'?'Transfer Out'
       :tx.transaction_type==='transfer_in'?'Transfer In'
       :tx.transaction_type==='loan_transfer_debit'?'Transferred to Loan Repayment'
