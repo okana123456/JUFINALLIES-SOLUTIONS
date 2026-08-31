@@ -1642,6 +1642,7 @@ function buildSidebar() {
 
     { isHeader: true, label: 'Lending', roles: ['admin', 'branch_manager', 'loan_officer', 'cashier', 'viewer'] },
     { id: 'clients', icon: 'users', label: 'Clients', roles: ['admin', 'branch_manager', 'loan_officer'] },
+    { id: 'inactive_clients', icon: 'user-check', label: 'Inactive Clients', roles: ['admin', 'branch_manager', 'loan_officer'] },
     { id: 'products', icon: 'package', label: 'Loan Products', roles: ['admin', 'branch_manager'] },
     { id: 'applications', icon: 'clipboard-list', label: 'Applications', roles: ['admin', 'branch_manager', 'loan_officer'] },
     { id: 'disbursement', icon: 'send', label: 'Disbursement', roles: ['admin', 'branch_manager', 'cashier'] },
@@ -1803,7 +1804,7 @@ function navigateTo(section){
   const main=$('#mainContent');
   showLoading(main);
   const renderers={
-    dashboard:renderDashboard,clients:renderClients,products:renderProducts,
+    dashboard:renderDashboard,clients:renderClients,inactive_clients:renderInactiveClients,products:renderProducts,
     applications:renderApplications,disbursement:renderDisbursement,loans:renderLoans,
     repayments:renderRepayments,overdue:renderOverdue,reports:renderReports,officer_performance:renderOfficerPerformance,officer_dashboard:renderOfficerDashboard,charges_excess:renderChargesExcessAccount,mpesa_transactions:renderMpesaTransactions,suspense:renderSuspense,
     accounting:renderAccounting,expenses:renderExpenses,staff:renderStaff,calculator:renderCalculator,
@@ -2497,6 +2498,125 @@ function filterClients(q){
   if(pag) pag.innerHTML='';
 }
 
+let inactiveClientPage=1;
+let inactiveClientSearch='';
+function hasOpenLoanBalance(loans){
+  return (loans||[]).some(l=>{
+    const bal=Number(l.outstanding_balance||0);
+    const status=String(l.status||'').toLowerCase();
+    return bal>0.01 && !['completed','cleared','closed','written_off','cancelled','rejected'].includes(status);
+  });
+}
+function buildInactiveClientRows(clients,loans,staff){
+  const staffMap={};
+  (staff||[]).forEach(s=>staffMap[s.id]=s.name);
+  const loansByClient={};
+  (loans||[]).forEach(l=>{
+    if(!loansByClient[l.client_id])loansByClient[l.client_id]=[];
+    loansByClient[l.client_id].push(l);
+  });
+  const isOnlyOfficer=hasRole('loan_officer')&&!hasRole('admin','branch_manager');
+  return (clients||[]).map(c=>{
+    const cLoans=(loansByClient[c.id]||[]).sort((a,b)=>new Date(b.disbursement_date||b.created_at||0)-new Date(a.disbursement_date||a.created_at||0));
+    if(!cLoans.length||hasOpenLoanBalance(cLoans))return null;
+    const lastLoan=cLoans[0];
+    const officerId=lastLoan?.loan_officer_id||window._clientOffMap?.[c.id]||'';
+    if(isOnlyOfficer&&officerId!==currentUser.id)return null;
+    const lastClosed=lastLoan?.updated_at||lastLoan?.maturity_date||lastLoan?.disbursement_date||lastLoan?.created_at||'';
+    return {
+      ...c,
+      _loan_count:cLoans.length,
+      _last_loan_no:lastLoan?.loan_no||'-',
+      _last_closed:lastClosed,
+      _officer_name:officerId?(staffMap[officerId]||'Unassigned'):'Unassigned',
+      _total_borrowed:cLoans.reduce((sum,l)=>sum+Number(l.principal_amount||0),0),
+      _total_paid:cLoans.reduce((sum,l)=>sum+Number(l.total_paid||0),0)
+    };
+  }).filter(Boolean);
+}
+
+async function renderInactiveClients(page=1){
+  inactiveClientPage=page;
+  const main=$('#mainContent');
+  if(!currentUser?.business_id)return;
+  try{
+    const [{data:clients,error:clientErr},{data:loans,error:loanErr},{data:staff}]=await Promise.all([
+      sb('loan_clients').select('*').eq('business_id',currentUser.business_id).order('full_name',{ascending:true}),
+      sb('loans').select('id,client_id,loan_no,loan_officer_id,status,principal_amount,total_paid,outstanding_balance,disbursement_date,maturity_date,created_at,updated_at').eq('business_id',currentUser.business_id).order('created_at',{ascending:false}),
+      sb('loan_staff').select('id,name').eq('business_id',currentUser.business_id)
+    ]);
+    if(clientErr)throw clientErr;
+    if(loanErr)throw loanErr;
+    cachedData.inactiveClients=buildInactiveClientRows(clients||[],loans||[],staff||[]);
+    paintInactiveClients();
+  }catch(e){
+    main.innerHTML=`<div class="empty-state"><p>Error loading inactive clients: ${escapeHtml(e.message)}</p></div>`;
+    toast(e.message,'error');
+  }
+}
+
+function paintInactiveClients(){
+  const main=$('#mainContent');
+  const rows=cachedData.inactiveClients||[];
+  const q=(inactiveClientSearch||'').toLowerCase().trim();
+  const filtered=q?rows.filter(c=>
+    (c.full_name||'').toLowerCase().includes(q)||
+    (c.phone||'').toLowerCase().includes(q)||
+    (c.id_number||'').toLowerCase().includes(q)||
+    (c._last_loan_no||'').toLowerCase().includes(q)
+  ):rows;
+  const p=paginate(filtered,inactiveClientPage,25);
+  main.innerHTML=`
+    <div class="page-header">
+      <div>
+        <h1>Inactive Clients</h1>
+        <p style="color:var(--text-secondary);font-size:13px;margin-top:4px">Clients with cleared loan history and no current outstanding loan balance.</p>
+      </div>
+      <button class="btn btn-primary" onclick="openAddClientModal()">+ Add Client</button>
+    </div>
+    <div class="search-bar" style="background:var(--card);padding:14px;border:1px solid var(--border);border-radius:10px;margin-bottom:14px;display:flex;gap:10px;align-items:center;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <span style="font-size:18px">🔎</span>
+      <input class="input" id="inactiveClientSearchInput" value="${escapeHtml(inactiveClientSearch)}" placeholder="Search inactive clients by name, phone, ID, or last loan number..." oninput="filterInactiveClients(this.value)" style="flex:1;font-size:14px;padding:10px 12px">
+      <button class="btn btn-outline btn-sm" onclick="filterInactiveClients('')">Clear</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px">
+      <div class="kpi-card"><div class="kpi-label">Inactive Borrowers</div><div class="kpi-value" style="font-size:18px;color:var(--accent-green)">${rows.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Previous Loans</div><div class="kpi-value" style="font-size:18px;color:var(--accent-blue)">${rows.reduce((s,c)=>s+Number(c._loan_count||0),0)}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Current Open Balance</div><div class="kpi-value" style="font-size:18px;color:var(--accent-green)">${fmtMoney(0)}</div></div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Name</th><th>ID No</th><th>Phone</th><th>Officer</th><th>Last Loan</th><th>Last Closed</th><th>Loans</th><th>Actions</th></tr></thead>
+      <tbody>${renderInactiveClientRows(p.items)}</tbody></table></div>
+    <div id="inactiveClientsPagination">${paginationHtml(p,'renderInactiveClients')}</div>
+  `;
+}
+
+function renderInactiveClientRows(clients){
+  if(!clients.length)return '<tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:24px">No inactive clients found.</td></tr>';
+  return clients.map(c=>`<tr>
+    <td><div class="client-name-cell">${clientAvatarHtml(c)}<strong>${escapeHtml(c.full_name)}</strong></div></td>
+    <td>${escapeHtml(c.id_number||'-')}</td>
+    <td>${escapeHtml(c.phone||'-')}</td>
+    <td><span class="badge badge-gray" style="text-transform:capitalize">${escapeHtml(c._officer_name||'Unassigned')}</span></td>
+    <td><strong>${escapeHtml(c._last_loan_no||'-')}</strong></td>
+    <td style="white-space:nowrap">${c._last_closed?fmtDate(String(c._last_closed).slice(0,10)):'-'}</td>
+    <td>${c._loan_count||0}</td>
+    <td style="white-space:nowrap">
+      <button class="btn btn-primary btn-sm" onclick="startRepeatLoanForClient('${c.id}')">New Loan</button>
+      <button class="btn btn-outline btn-sm" onclick="viewClient('${c.id}')">View</button>
+    </td>
+  </tr>`).join('');
+}
+
+function filterInactiveClients(q){
+  inactiveClientSearch=q||'';
+  inactiveClientPage=1;
+  paintInactiveClients();
+}
+
+async function startRepeatLoanForClient(clientId){
+  await openNewApplication(clientId);
+}
+
 async function openAddClientModal(){
   // Fetch staff for officer assignment dropdown
   const {data:staffList} = await sb('loan_staff').select('id,name,role').eq('business_id', currentUser.business_id).eq('is_active', true);
@@ -2591,6 +2711,7 @@ async function viewClient(id){
     const photoInputId = `clientPhotoInput_${String(c.id).replace(/[^a-zA-Z0-9_-]/g,'')}`;
     const assetInputId = `clientAssetInput_${String(c.id).replace(/[^a-zA-Z0-9_-]/g,'')}`;
     const assetPhotos = clientAssetPaths(c);
+    const clientHasOpenLoan = hasOpenLoanBalance(cLoans||[]);
     const canManagePhoto = hasRole('admin','branch_manager');
     const canAddPhotoOnce = hasRole('loan_officer') && !canManagePhoto && !c.photo_path;
     const canShowPhotoUpload = canManagePhoto || canAddPhotoOnce;
@@ -2665,6 +2786,7 @@ async function viewClient(id){
       </tbody></table></div>
       ${clientChargeProfileHtml}
       <div class="modal-actions">
+        ${!clientHasOpenLoan&&cLoans?.length?`<button class="btn btn-primary" onclick="closeModal();startRepeatLoanForClient('${c.id}')">New Loan</button>`:''}
         ${hasRole('admin','branch_manager')?`<button class="btn btn-outline" onclick="editClient('${c.id}')">✏️ Edit Client</button>`:''}
         <button class="btn btn-outline" onclick="closeModal()">Close</button>
       </div>
@@ -3095,7 +3217,7 @@ function toggleBulkApproveApplications(checked){
   updateBulkApproveApplicationsBtn();
 }
 
-async function openNewApplication(){
+async function openNewApplication(preselectedClientId=''){
   const{data:clients}=await sb('loan_clients').select('id,full_name,phone,id_number').eq('business_id', currentUser.business_id).order('full_name');
   const products=(await ensureJufinalliesProducts()).filter(p=>p.is_active!==false);
   const productOptions=products.map(p=>`<option value="${p.id}" data-name="${escapeHtml(p.name)}">${escapeHtml(p.name)} - ${escapeHtml(jufinalliesProductByName(p.name)?.description||p.description||'')}</option>`).join('');
@@ -3110,7 +3232,7 @@ async function openNewApplication(){
     return `<option value="${label.replace(/"/g,'&quot;')}"></option>`;
   }).join('');
   openModal(`
-    <h2>New Loan Application</h2>
+    <h2>${preselectedClientId?'New Loan for Existing Client':'New Loan Application'}</h2>
     <div class="steps"><div class="step active" data-step="1">1. Client</div><div class="step" data-step="2">2. Loan Details</div><div class="step" data-step="3">3. Review &amp; Submit</div></div>
     <div id="appStep1">
       <div class="form-group">
@@ -3120,7 +3242,7 @@ async function openNewApplication(){
         <input type="hidden" id="appClient" value="">
         <div id="appClientPickInfo" style="margin-top:6px;font-size:12px;color:var(--text-secondary)"></div>
       </div>
-      <p style="font-size:12px;color:var(--text-secondary);margin-top:6px">Select the client first. Guarantor details will be captured on this loan application.</p>
+      <p style="font-size:12px;color:var(--text-secondary);margin-top:6px">${preselectedClientId?'This returning client is already selected. Continue straight to loan details.':'Select the client first. Guarantor details will be captured on this loan application.'}</p>
     </div>
     <div id="appStep2" style="display:none">
       <div class="form-group"><label>Jufinallies Product *</label><select class="select" id="appProduct" onchange="updateAppAmountOptions()"><option value="">Select product</option>${productOptions}</select></div>
@@ -3128,15 +3250,36 @@ async function openNewApplication(){
       <div id="appTierInfo" class="card" style="margin:8px 0;font-size:13px;display:none"></div>
       <div class="form-row"><div class="form-group"><label>Term *</label><select class="select" id="appTerm" onchange="appCalcUpdate()" disabled><option value="">Select an amount first</option></select></div><div class="form-group"><label>Application Date</label><input class="input" type="date" id="appDate" value="${today()}" max="${today()}"></div></div>
       <div class="form-group"><label>Purpose</label><textarea class="textarea" id="appPurpose"></textarea></div>
-      <div style="padding:8px 12px;background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.25);border-radius:8px;margin:10px 0 12px;font-size:12px;color:var(--text-secondary)"><strong>Loan Guarantor Details</strong></div>
-      <div class="form-row"><div class="form-group"><label>Guarantor Full Name</label><input class="input" id="appGuarantorName"></div><div class="form-group"><label>Guarantor Phone</label><input class="input" id="appGuarantorPhone"></div></div>
-      <div class="form-group"><label>Guarantor Relationship</label><input class="input" id="appGuarantorRel" placeholder="e.g. Spouse, Friend, Business partner"></div>
+      <div id="appGuarantorBlock">
+        <div style="padding:8px 12px;background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.25);border-radius:8px;margin:10px 0 12px;font-size:12px;color:var(--text-secondary)"><strong>Loan Guarantor Details</strong></div>
+        <div class="form-row"><div class="form-group"><label>Guarantor Full Name</label><input class="input" id="appGuarantorName"></div><div class="form-group"><label>Guarantor Phone</label><input class="input" id="appGuarantorPhone"></div></div>
+        <div class="form-group"><label>Guarantor Relationship</label><input class="input" id="appGuarantorRel" placeholder="e.g. Spouse, Friend, Business partner"></div>
+      </div>
+      <div id="repeatLoanNote" style="display:none;padding:10px 12px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:8px;margin:10px 0 12px;font-size:12px;color:var(--text-secondary)">Returning client selected. Existing profile details remain on the client record, so this loan can be created without re-entering guarantor details.</div>
       <div id="appCalcResult" class="card" style="margin-top:8px"></div>
     </div>
     <div id="appStep3" style="display:none"><div id="appReview"></div></div>
     <div class="modal-actions"><button class="btn btn-outline" id="appPrevBtn" onclick="appStepNav(-1)" style="display:none">Back</button><button class="btn btn-primary" id="appNextBtn" onclick="appStepNav(1)">Next</button></div>
   `,true);
   window._appStep=1;window._appProducts=products||[];window._appClients=clients||[];
+  if(preselectedClientId){
+    const c=(clients||[]).find(x=>x.id===preselectedClientId);
+    if(c){
+      const label=`${c.full_name} — ${c.phone||''}${c.id_number?(' — ID '+c.id_number):''}`;
+      const search=document.getElementById('appClientSearch');
+      const hidden=document.getElementById('appClient');
+      if(search)search.value=label;
+      if(hidden)hidden.value=c.id;
+      onAppClientPick(label);
+      const guarantorBlock=document.getElementById('appGuarantorBlock');
+      const repeatNote=document.getElementById('repeatLoanNote');
+      if(guarantorBlock)guarantorBlock.style.display='none';
+      if(repeatNote)repeatNote.style.display='block';
+      setTimeout(()=>appStepNav(1),0);
+    }else{
+      toast('Selected inactive client was not found. Please search manually.','warning');
+    }
+  }
 }
 
 function onAppClientPick(val){
@@ -5059,6 +5202,7 @@ async function savePayment(){
     // Refresh current section + always refresh dashboard in background
     if(currentSection==='repayments')renderRepayments();
     else if(currentSection==='loans')renderLoans();
+    else if(currentSection==='inactive_clients')renderInactiveClients();
     else if(currentSection==='dashboard')renderDashboard();
     else if(currentSection==='overdue')renderOverdue();
     // Always refresh dashboard data in background so KPIs are current
