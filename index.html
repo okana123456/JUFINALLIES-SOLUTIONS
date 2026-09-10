@@ -1154,6 +1154,29 @@ function jufinalliesProductByName(name){
   const clean=String(name||'').trim().toLowerCase();
   return JUFINALLIES_PRODUCTS.find(p=>p.name.toLowerCase()===clean||p.key===clean)||null;
 }
+function cachedProductByName(name){
+  const clean=String(name||'').trim().toLowerCase();
+  return (cachedData.products||window._appProducts||window._calcProducts||[]).find(p=>String(p?.name||'').trim().toLowerCase()===clean)||null;
+}
+function resolveJufinalliesProduct(productRef,amount=0){
+  if(productRef&&typeof productRef==='object')return productRef;
+  const named=cachedProductByName(productRef);
+  if(named)return named;
+  const fixed=jufinalliesProductByName(productRef);
+  if(fixed)return fixed;
+  return jufinalliesProductsForAmount(amount)[0]||null;
+}
+function isFixedJufinalliesProduct(productRef){
+  const name=typeof productRef==='object'?productRef?.name:productRef;
+  return !!jufinalliesProductByName(name);
+}
+function validCustomProduct(product){
+  if(!product||isFixedJufinalliesProduct(product))return true;
+  return Number(product.min_amount)>0&&Number(product.max_amount)>=Number(product.min_amount)&&
+    Number.isInteger(Number(product.min_term_weeks))&&Number(product.min_term_weeks)>=1&&
+    Number.isInteger(Number(product.max_term_weeks))&&Number(product.max_term_weeks)>=Number(product.min_term_weeks)&&
+    Number(product.interest_rate)>=0&&Number(product.processing_fee_pct)>=0;
+}
 function jufinalliesProductsForAmount(amount){
   const n=Number(amount||0);
   return JUFINALLIES_PRODUCTS.filter(p=>n>=p.min&&n<=p.max);
@@ -1162,26 +1185,36 @@ function jufinalliesPricing(productName, amount, termWeeks){
   const product=String(productName||'').trim().toUpperCase();
   return JUFINALLIES_PRICING.find(r=>r.product===product&&r.amount===Number(amount)&&r.termWeeks===Number(termWeeks))||null;
 }
-function jufinalliesAmounts(productName){
-  return [...new Set(JUFINALLIES_PRICING.filter(r=>r.product===String(productName||'').toUpperCase()).map(r=>r.amount))].sort((a,b)=>a-b);
+function jufinalliesAmounts(productRef){
+  const product=resolveJufinalliesProduct(productRef);
+  if(!product)return [];
+  if(!isFixedJufinalliesProduct(product))return [];
+  return [...new Set(JUFINALLIES_PRICING.filter(r=>r.product===String(product.name||'').toUpperCase()).map(r=>r.amount))].sort((a,b)=>a-b);
 }
-function jufinalliesTerms(productName, amount){
-  return JUFINALLIES_PRICING.filter(r=>r.product===String(productName||'').toUpperCase()&&r.amount===Number(amount)).map(r=>r.termWeeks).sort((a,b)=>a-b);
+function jufinalliesTerms(productRef, amount){
+  const product=resolveJufinalliesProduct(productRef,amount);
+  if(!product)return [];
+  if(isFixedJufinalliesProduct(product))return JUFINALLIES_PRICING.filter(r=>r.product===String(product.name||'').toUpperCase()&&r.amount===Number(amount)).map(r=>r.termWeeks).sort((a,b)=>a-b);
+  if(!validCustomProduct(product))return [];
+  const min=Number(product.min_term_weeks),max=Number(product.max_term_weeks);
+  return Array.from({length:max-min+1},(_,i)=>min+i);
 }
-function getJufinalliesProduct(amount, productName=''){
-  return jufinalliesProductByName(productName) || jufinalliesProductsForAmount(amount)[0] || null;
+function getJufinalliesProduct(amount, productRef=''){
+  return resolveJufinalliesProduct(productRef,amount);
 }
-function getAutoRate(amount, productName='', termWeeks=0){
-  const rule=jufinalliesPricing(productName,amount,termWeeks)||JUFINALLIES_PRICING.find(r=>r.product===String(productName||'').toUpperCase()&&r.amount===Number(amount));
-  return rule ? Number((rule.totalInterest/Number(amount||1)/rule.termWeeks*100).toFixed(4)) : 0;
+function getAutoRate(amount, productRef='', termWeeks=0){
+  const product=getJufinalliesProduct(amount,productRef);
+  const rule=jufinalliesPricing(product?.name,amount,termWeeks)||JUFINALLIES_PRICING.find(r=>r.product===String(product?.name||'').toUpperCase()&&r.amount===Number(amount));
+  return rule ? Number((rule.totalInterest/Number(amount||1)/rule.termWeeks*100).toFixed(4)) : Number(product?.interest_rate||0);
 }
-function getAutoTier(amount, productName=''){
-  const product=getJufinalliesProduct(amount, productName);
+function getAutoTier(amount, productRef=''){
+  const product=getJufinalliesProduct(amount, productRef);
   return product ? product.name : 'No matching Jufinallies product';
 }
 function jufinalliesFeeLabel(product){
   if(!product) return 'No matching product';
-  return 'Processing fee';
+  if(isFixedJufinalliesProduct(product))return 'Processing fee';
+  return `${Number(product.processing_fee_pct||0)}% processing fee`;
 }
 function jufinalliesFeeName(product){
   return 'Processing fee';
@@ -1201,28 +1234,48 @@ function registrationFeeIncomeDate(client, firstLoan=null){
   if(firstLoan?.disbursement_date) return String(firstLoan.disbursement_date).slice(0,10);
   return client?.created_at ? String(client.created_at).slice(0,10) : '';
 }
-function processingFeeFor(amount, productName='', termWeeks=0){
-  const rule=jufinalliesPricing(productName,amount,termWeeks)||JUFINALLIES_PRICING.find(r=>r.product===String(productName||'').toUpperCase()&&r.amount===Number(amount));
-  return Number(rule?.processingFee||0);
+function processingFeeFor(amount, productRef='', termWeeks=0){
+  const product=getJufinalliesProduct(amount,productRef);
+  const rule=jufinalliesPricing(product?.name,amount,termWeeks)||JUFINALLIES_PRICING.find(r=>r.product===String(product?.name||'').toUpperCase()&&r.amount===Number(amount));
+  if(rule)return Number(rule.processingFee||0);
+  return Number((Number(amount||0)*Number(product?.processing_fee_pct||0)/100).toFixed(2));
 }
-function calcJufinalliesLoan(principal, termWeeks, productName='', type='flat'){
-  const product=getJufinalliesProduct(principal, productName);
+function calcJufinalliesLoan(principal, termWeeks, productRef='', type='flat'){
+  const product=getJufinalliesProduct(principal, productRef);
   const rule=jufinalliesPricing(product?.name,principal,termWeeks);
-  if(!rule)return {weekly:0,totalInterest:0,totalPayable:0,schedule:[],product,periodRate:0,intervalWeeks:1,installments:0,installmentLabel:'Weekly Repayment',valid:false};
-  const installments=rule.termWeeks;
-  const weekly=Number((rule.totalPayable/installments).toFixed(2));
+  const amount=Number(principal||0),term=Number(termWeeks||0);
+  const customValid=product&&!isFixedJufinalliesProduct(product)&&validCustomProduct(product)&&amount>=Number(product.min_amount)&&amount<=Number(product.max_amount)&&Number.isInteger(term)&&term>=Number(product.min_term_weeks)&&term<=Number(product.max_term_weeks);
+  if(!rule&&!customValid)return {weekly:0,totalInterest:0,totalPayable:0,schedule:[],product,periodRate:Number(product?.interest_rate||0),intervalWeeks:1,installments:0,installmentLabel:'Weekly Repayment',valid:false};
+  const installments=rule?rule.termWeeks:term;
+  const periodRate=rule?getAutoRate(amount,product,term):Number(product.interest_rate||0);
+  const weeklyRate=String(product?.interest_period||'weekly').toLowerCase()==='monthly'?periodRate/4:periodRate;
+  const interestType=rule?'flat':String(product?.interest_type||type||'flat').toLowerCase();
+  let totalInterest=rule?Number(rule.totalInterest):0;
+  let totalPayable=rule?Number(rule.totalPayable):0;
+  if(!rule&&interestType!=='reducing_balance'){
+    totalInterest=Number((amount*(weeklyRate/100)*installments).toFixed(2));
+    totalPayable=Number((amount+totalInterest).toFixed(2));
+  }
+  const weekly=rule?Number((totalPayable/installments).toFixed(2)):0;
   const principalPer=Number((Number(principal)/installments).toFixed(2));
-  const interestPer=Number((rule.totalInterest/installments).toFixed(2));
+  const interestPer=interestType==='reducing_balance'?0:Number((totalInterest/installments).toFixed(2));
   let principalAssigned=0,interestAssigned=0,totalAssigned=0;
   const schedule=Array.from({length:installments},(_,i)=>{
     const last=i===installments-1;
     const principalPart=last?Number((Number(principal)-principalAssigned).toFixed(2)):principalPer;
-    const interestPart=last?Number((rule.totalInterest-interestAssigned).toFixed(2)):interestPer;
-    const totalPart=last?Number((rule.totalPayable-totalAssigned).toFixed(2)):Number((principalPart+interestPart).toFixed(2));
+    const interestPart=interestType==='reducing_balance'
+      ?Number(((Number(principal)-principalAssigned)*(weeklyRate/100)).toFixed(2))
+      :(last?Number((totalInterest-interestAssigned).toFixed(2)):interestPer);
+    const totalPart=rule&&last?Number((totalPayable-totalAssigned).toFixed(2)):Number((principalPart+interestPart).toFixed(2));
     principalAssigned+=principalPart;interestAssigned+=interestPart;totalAssigned+=totalPart;
     return {no:i+1,principal:principalPart,interest:interestPart,total:totalPart,balance:Number(Math.max(0,Number(principal)-principalAssigned).toFixed(2))};
   });
-  return {weekly,totalInterest:rule.totalInterest,totalPayable:rule.totalPayable,schedule,product,rule,periodRate:getAutoRate(principal,product?.name,termWeeks),intervalWeeks:1,installments,installmentLabel:'Weekly Repayment',valid:true};
+  if(!rule&&interestType==='reducing_balance'){
+    totalInterest=Number(schedule.reduce((sum,s)=>sum+s.interest,0).toFixed(2));
+    totalPayable=Number((amount+totalInterest).toFixed(2));
+  }
+  const installment=Number((totalPayable/installments).toFixed(2));
+  return {weekly:rule?weekly:installment,totalInterest,totalPayable,schedule,product,rule,periodRate,intervalWeeks:1,installments,installmentLabel:'Weekly Repayment',valid:true};
 }
 
 // ═══ AUTH — EMAIL + GOOGLE ═══
@@ -3058,23 +3111,28 @@ async function renderProducts(){
     main.innerHTML=`
       <div class="page-header"><h1>Loan Products</h1>${hasRole('admin')?'<button class="btn btn-primary" onclick="openAddProductModal()">+ Add Product</button>':''}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
-      ${(products||[]).map(p=>`
+      ${(products||[]).map(p=>{
+        const fixed=isFixedJufinalliesProduct(p);
+        const terms=fixed?[...new Set(JUFINALLIES_PRICING.filter(r=>r.product===String(p.name||'').toUpperCase()).map(r=>r.termWeeks))]:jufinalliesTerms(p);
+        const needsSetup=!fixed&&!validCustomProduct(p);
+        return `
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
             <div><strong style="font-size:16px">${p.name}</strong></div>
-            ${p.is_active?'<span class="badge badge-green">Active</span>':'<span class="badge badge-gray">Inactive</span>'}
+            ${p.is_active&&!needsSetup?'<span class="badge badge-green">Active</span>':needsSetup?'<span class="badge badge-red">Needs setup</span>':'<span class="badge badge-gray">Inactive</span>'}
           </div>
           <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">${p.description||jufinalliesProductByName(p.name)?.description||'No description'}</p>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
             <div><span style="color:var(--text-secondary)">Amount:</span> ${fmtMoney(p.min_amount)} - ${fmtMoney(p.max_amount)}</div>
-            <div><span style="color:var(--text-secondary)">Plans:</span> ${[...new Set(JUFINALLIES_PRICING.filter(r=>r.product===p.name).map(r=>r.termWeeks))].join(', ')} weeks</div>
+            <div><span style="color:var(--text-secondary)">Plans:</span> ${terms.length?(fixed?terms.join(', '):`${terms[0]}${terms.length>1?' - '+terms[terms.length-1]:''}`):'Not configured'} weeks</div>
             <div><span style="color:var(--text-secondary)">Payments:</span> Weekly</div>
             <div><span style="color:var(--text-secondary)">Fixed Fees:</span> ${fmtMoney(LOAN_FORM_FEE+CREDIT_REPORT_FEE)} + processing</div>
-            <div><span style="color:var(--text-secondary)">Fee:</span> ${jufinalliesFeeLabel(jufinalliesProductByName(p.name))}</div>
+            <div><span style="color:var(--text-secondary)">Fee:</span> ${jufinalliesFeeLabel(p)}</div>
           </div>
+          ${needsSetup?'<div style="margin-top:10px;font-size:12px;color:var(--accent-red)">Edit this product and enter a valid amount range, term range, interest rate and processing fee before issuing loans.</div>':''}
           <div style="margin-top:12px;display:flex;gap:6px">${hasRole('admin')?`<button class="btn btn-outline btn-sm" onclick="editProduct('${p.id}')">Edit</button><button class="btn btn-outline btn-sm" onclick="deleteProduct('${p.id}')">Delete</button>`:'<span style="font-size:12px;color:var(--text-secondary)">View only</span>'}</div>
         </div>
-      `).join('')||'<div class="empty-state"><p>No loan products yet. Create your first product.</p></div>'}
+      `}).join('')||'<div class="empty-state"><p>No loan products yet. Create your first product.</p></div>'}
       </div>
     `;
   }catch(e){toast(e.message,'error')}
@@ -3084,23 +3142,29 @@ function openAddProductModal(prod){
   const p=prod||{};
   openModal(`
     <h2>${p.id?'Edit':'Add'} Loan Product</h2>
+    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">Custom product settings are used automatically in applications, approvals, disbursements, fees, repayment schedules and the calculator. The original five products retain their approved fixed pricing matrix.</p>
     <div class="form-row"><div class="form-group"><label>Name *</label><input class="input" id="pName" value="${p.name||''}"></div><div class="form-group"><label>Interest Period</label><select class="select" id="pIntPeriod"><option value="weekly" ${(p.interest_period||'weekly')==='weekly'?'selected':''}>Weekly</option><option value="monthly" ${p.interest_period==='monthly'?'selected':''}>Monthly</option></select></div></div>
     <div class="form-group"><label>Description</label><textarea class="textarea" id="pDesc">${p.description||''}</textarea></div>
-    <div class="form-row"><div class="form-group"><label>Min Amount</label><input class="input" type="number" id="pMinAmt" value="${p.min_amount||500}"></div><div class="form-group"><label>Max Amount</label><input class="input" type="number" id="pMaxAmt" value="${p.max_amount||100000}"></div></div>
-    <div class="form-row"><div class="form-group"><label>Interest Rate (%)</label><input class="input" type="number" step="0.01" id="pRate" value="${p.interest_rate||5}"></div><div class="form-group"><label>Interest Type</label><select class="select" id="pIntType"><option value="flat" ${p.interest_type==='flat'?'selected':''}>Flat Rate</option><option value="reducing_balance" ${p.interest_type==='reducing_balance'?'selected':''}>Reducing Balance</option></select></div></div>
-    <div class="form-row"><div class="form-group"><label>Min Term (weeks)</label><input class="input" type="number" id="pMinTerm" value="${p.min_term_weeks||1}"></div><div class="form-group"><label>Max Term (weeks)</label><input class="input" type="number" id="pMaxTerm" value="${p.max_term_weeks||52}"></div></div>
-    <div class="form-row"><div class="form-group"><label>Processing Fee %</label><input class="input" type="number" step="0.1" id="pFee" value="${p.processing_fee_pct||3}"></div><div class="form-group"><label>Late Penalty %</label><input class="input" type="number" step="0.1" id="pPenalty" value="${p.late_penalty_pct||5}"></div></div>
-    <div class="form-row"><div class="form-group"><label>Grace Period (days)</label><input class="input" type="number" id="pGrace" value="${p.grace_period_days||3}"></div><div class="form-group"><label>Active</label><select class="select" id="pActive"><option value="true" ${p.is_active!==false?'selected':''}>Yes</option><option value="false" ${p.is_active===false?'selected':''}>No</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label>Min Amount</label><input class="input" type="number" id="pMinAmt" value="${p.min_amount??500}"></div><div class="form-group"><label>Max Amount</label><input class="input" type="number" id="pMaxAmt" value="${p.max_amount??100000}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Interest Rate (%) per selected period</label><input class="input" type="number" step="0.01" id="pRate" value="${p.interest_rate??5}"></div><div class="form-group"><label>Interest Type</label><select class="select" id="pIntType"><option value="flat" ${p.interest_type==='flat'?'selected':''}>Flat Rate</option><option value="reducing_balance" ${p.interest_type==='reducing_balance'?'selected':''}>Reducing Balance</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label>Min Term (weeks)</label><input class="input" type="number" id="pMinTerm" value="${p.min_term_weeks??1}"></div><div class="form-group"><label>Max Term (weeks)</label><input class="input" type="number" id="pMaxTerm" value="${p.max_term_weeks??52}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Processing Fee %</label><input class="input" type="number" step="0.1" id="pFee" value="${p.processing_fee_pct??3}"></div><div class="form-group"><label>Late Penalty %</label><input class="input" type="number" step="0.1" id="pPenalty" value="${p.late_penalty_pct??5}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Grace Period (days)</label><input class="input" type="number" id="pGrace" value="${p.grace_period_days??3}"></div><div class="form-group"><label>Active</label><select class="select" id="pActive"><option value="true" ${p.is_active!==false?'selected':''}>Yes</option><option value="false" ${p.is_active===false?'selected':''}>No</option></select></div></div>
     <div class="form-group"><label><input type="checkbox" id="pGuarantor" ${p.requires_guarantor?'checked':''}> Requires Guarantor</label></div>
     <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveProduct('${p.id||''}')">${p.id?'Update':'Save'} Product</button></div>
   `,true);
 }
 
 async function saveProduct(id){
-  const rec={name:$('#pName').value,description:$('#pDesc').value,min_amount:Number($('#pMinAmt').value),max_amount:Number($('#pMaxAmt').value),interest_rate:Number($('#pRate').value),interest_type:$('#pIntType').value,interest_period:$('#pIntPeriod').value,min_term_weeks:Number($('#pMinTerm').value),max_term_weeks:Number($('#pMaxTerm').value),processing_fee_pct:Number($('#pFee').value),late_penalty_pct:Number($('#pPenalty').value),grace_period_days:Number($('#pGrace').value),requires_guarantor:$('#pGuarantor').checked,is_active:$('#pActive').value==='true',business_id:currentUser?.business_id};
+  const rec={name:$('#pName').value.trim(),description:$('#pDesc').value.trim(),min_amount:Number($('#pMinAmt').value),max_amount:Number($('#pMaxAmt').value),interest_rate:Number($('#pRate').value),interest_type:$('#pIntType').value,interest_period:$('#pIntPeriod').value,min_term_weeks:Number($('#pMinTerm').value),max_term_weeks:Number($('#pMaxTerm').value),processing_fee_pct:Number($('#pFee').value),late_penalty_pct:Number($('#pPenalty').value),grace_period_days:Number($('#pGrace').value),requires_guarantor:$('#pGuarantor').checked,is_active:$('#pActive').value==='true',business_id:currentUser?.business_id};
   if(!rec.name)return toast('Product name is required','warning');
+  if(!(rec.min_amount>0)||rec.max_amount<rec.min_amount)return toast('Enter a valid minimum and maximum loan amount','warning');
+  if(!Number.isInteger(rec.min_term_weeks)||rec.min_term_weeks<1||!Number.isInteger(rec.max_term_weeks)||rec.max_term_weeks<rec.min_term_weeks)return toast('Enter a valid term range of at least one week','warning');
+  if(rec.interest_rate<0||rec.processing_fee_pct<0||rec.late_penalty_pct<0)return toast('Rates and fees cannot be negative','warning');
   try{
-    if(id){await sb('loan_products').update(rec).eq('id',id)}else{await sb('loan_products').insert(rec)}
+    const result=id?await sb('loan_products').update(rec).eq('id',id).eq('business_id',currentUser.business_id):await sb('loan_products').insert(rec);
+    if(result.error)throw result.error;
+    cachedData.products=null;
     toast(id?'Product updated':'Product created','success');closeModal();renderProducts();
   }catch(e){toast(e.message,'error')}
 }
@@ -3220,7 +3284,7 @@ function toggleBulkApproveApplications(checked){
 async function openNewApplication(preselectedClientId=''){
   const{data:clients}=await sb('loan_clients').select('id,full_name,phone,id_number').eq('business_id', currentUser.business_id).order('full_name');
   const products=(await ensureJufinalliesProducts()).filter(p=>p.is_active!==false);
-  const productOptions=products.map(p=>`<option value="${p.id}" data-name="${escapeHtml(p.name)}">${escapeHtml(p.name)} - ${escapeHtml(jufinalliesProductByName(p.name)?.description||p.description||'')}</option>`).join('');
+  const productOptions=products.map(p=>`<option value="${p.id}" data-name="${escapeHtml(p.name)}" ${validCustomProduct(p)?'':'disabled'}>${escapeHtml(p.name)} - ${escapeHtml(jufinalliesProductByName(p.name)?.description||p.description||'')}${validCustomProduct(p)?'':' (needs setup)'}</option>`).join('');
   // Build datalist; encode id in option's data-id via a hidden lookup map
   window._appClientLookup = {};
   const optionsHtml = (clients||[]).map(c=>{
@@ -3246,7 +3310,7 @@ async function openNewApplication(preselectedClientId=''){
     </div>
     <div id="appStep2" style="display:none">
       <div class="form-group"><label>Jufinallies Product *</label><select class="select" id="appProduct" onchange="updateAppAmountOptions()"><option value="">Select product</option>${productOptions}</select></div>
-      <div class="form-group"><label>Loan Amount *</label><select class="select" id="appAmount" onchange="updateAppTermOptions()" disabled><option value="">Select a product first</option></select></div>
+      <div class="form-group"><label>Loan Amount *</label><div id="appAmountField"><select class="select" id="appAmount" onchange="updateAppTermOptions()" disabled><option value="">Select a product first</option></select></div></div>
       <div id="appTierInfo" class="card" style="margin:8px 0;font-size:13px;display:none"></div>
       <div class="form-row"><div class="form-group"><label>Term *</label><select class="select" id="appTerm" onchange="appCalcUpdate()" disabled><option value="">Select an amount first</option></select></div><div class="form-group"><label>Application Date</label><input class="input" type="date" id="appDate" value="${today()}" max="${today()}"></div></div>
       <div class="form-group"><label>Purpose</label><textarea class="textarea" id="appPurpose"></textarea></div>
@@ -3261,7 +3325,7 @@ async function openNewApplication(preselectedClientId=''){
     <div id="appStep3" style="display:none"><div id="appReview"></div></div>
     <div class="modal-actions"><button class="btn btn-outline" id="appPrevBtn" onclick="appStepNav(-1)" style="display:none">Back</button><button class="btn btn-primary" id="appNextBtn" onclick="appStepNav(1)">Next</button></div>
   `,true);
-  window._appStep=1;window._appProducts=products||[];window._appClients=clients||[];
+  window._appStep=1;window._appProducts=products||[];window._appClients=clients||[];window._appSkipGuarantor=!!preselectedClientId;
   if(preselectedClientId){
     const c=(clients||[]).find(x=>x.id===preselectedClientId);
     if(c){
@@ -3309,17 +3373,23 @@ function onAppClientPick(val){
 
 function selectedAppProduct(){
   const sel=document.getElementById('appProduct');
-  const row=(window._appProducts||[]).find(p=>p.id===sel?.value);
-  return jufinalliesProductByName(row?.name||sel?.selectedOptions?.[0]?.dataset?.name||'');
+  return (window._appProducts||[]).find(p=>p.id===sel?.value)||null;
 }
 
 function updateAppAmountOptions(){
   const product=selectedAppProduct();
-  const amountSelect=$('#appAmount');
+  const amountField=$('#appAmountField');
   const termSelect=$('#appTerm');
-  const amounts=jufinalliesAmounts(product?.name);
-  amountSelect.disabled=!amounts.length;
-  amountSelect.innerHTML=amounts.length?`<option value="">Select amount</option>${amounts.map(a=>`<option value="${a}">${fmtMoney(a)}</option>`).join('')}`:'<option value="">Select a product first</option>';
+  const guarantorBlock=$('#appGuarantorBlock');
+  if(guarantorBlock)guarantorBlock.style.display=window._appSkipGuarantor||product?.requires_guarantor===false?'none':'block';
+  const amounts=jufinalliesAmounts(product);
+  if(!product){
+    amountField.innerHTML='<select class="select" id="appAmount" disabled><option value="">Select a product first</option></select>';
+  }else if(isFixedJufinalliesProduct(product)){
+    amountField.innerHTML=`<select class="select" id="appAmount" onchange="updateAppTermOptions()"><option value="">Select amount</option>${amounts.map(a=>`<option value="${a}">${fmtMoney(a)}</option>`).join('')}</select>`;
+  }else{
+    amountField.innerHTML=`<input class="input" type="number" id="appAmount" min="${Number(product.min_amount)}" max="${Number(product.max_amount)}" step="1" placeholder="${fmtMoney(product.min_amount)} - ${fmtMoney(product.max_amount)}" oninput="updateAppTermOptions()">`;
+  }
   termSelect.disabled=true;
   termSelect.innerHTML='<option value="">Select an amount first</option>';
   appCalcUpdate();
@@ -3329,9 +3399,10 @@ function updateAppTermOptions(){
   const product=selectedAppProduct();
   const amount=Number($('#appAmount')?.value||0);
   const termSelect=$('#appTerm');
-  const terms=jufinalliesTerms(product?.name,amount);
+  const inRange=product&&amount>=Number(product.min_amount)&&amount<=Number(product.max_amount);
+  const terms=inRange?jufinalliesTerms(product,amount):[];
   termSelect.disabled=!terms.length;
-  termSelect.innerHTML=terms.length?`<option value="">Select term</option>${terms.map(t=>`<option value="${t}">${t} weeks</option>`).join('')}`:'<option value="">Select an amount first</option>';
+  termSelect.innerHTML=terms.length?`<option value="">Select term</option>${terms.map(t=>`<option value="${t}">${t} weeks</option>`).join('')}`:`<option value="">${amount?'Amount is outside this product range':'Enter an amount first'}</option>`;
   appCalcUpdate();
 }
 
@@ -3346,7 +3417,7 @@ function appStepNav(dir){
     if(!$('#appProduct')?.value)return toast('Select a Jufinallies product','warning');
     const product=selectedAppProduct();
     if(!product)return toast('Selected product is not configured','warning');
-    if(!jufinalliesPricing(product.name,amt,Number($('#appTerm').value)))return toast('Select an approved amount and term for this product','warning');
+    if(!calcJufinalliesLoan(amt,Number($('#appTerm').value),product).valid)return toast('Select an amount and term allowed by this product','warning');
     buildAppReview();
   }
   window._appStep=s;
@@ -3363,12 +3434,12 @@ function appCalcUpdate(){
   const product=selectedAppProduct();
   const tierInfo=$('#appTierInfo');
   if(amt>0&&tierInfo){
-    const tier=getAutoTier(amt, product?.name);
+    const tier=getAutoTier(amt, product);
     tierInfo.style.display='block';
-    const rule=jufinalliesPricing(product?.name,amt,term);
-    tierInfo.innerHTML=`<strong>${tier}</strong> | Loan form: <strong>${fmtMoney(LOAN_FORM_FEE)}</strong> | Credit report: <strong>${fmtMoney(CREDIT_REPORT_FEE)}</strong>${rule?` | Processing: <strong>${fmtMoney(rule.processingFee)}</strong>`:''}`;
+    const fee=processingFeeFor(amt,product,term);
+    tierInfo.innerHTML=`<strong>${tier}</strong> | Loan form: <strong>${fmtMoney(LOAN_FORM_FEE)}</strong> | Credit report: <strong>${fmtMoney(CREDIT_REPORT_FEE)}</strong>${term?` | Processing: <strong>${fmtMoney(fee)}</strong>`:''}`;
     if(term>0){
-      const c=calcJufinalliesLoan(amt,term,product?.name,'flat');
+      const c=calcJufinalliesLoan(amt,term,product,product?.interest_type);
       $('#appCalcResult').innerHTML=c.valid?`<div style="font-size:13px"><strong>${c.installmentLabel}:</strong> ${fmtMoney(c.weekly)} | <strong>Total Interest:</strong> ${fmtMoney(c.totalInterest)} | <strong>Total:</strong> ${fmtMoney(c.totalPayable)}</div>`:'<div style="color:var(--accent-red)">Select a valid amount and term.</div>';
     }
   }else if(tierInfo){tierInfo.style.display='none'}
@@ -3380,8 +3451,8 @@ function buildAppReview(){
   const client = c?`${c.full_name} (${c.phone||''})`:'-';
   const amt=Number($('#appAmount').value);
   const product=selectedAppProduct();
-  const tier=getAutoTier(amt, product?.name);
-  const calc=calcJufinalliesLoan(amt,Number($('#appTerm').value),product?.name,'flat');
+  const tier=getAutoTier(amt, product);
+  const calc=calcJufinalliesLoan(amt,Number($('#appTerm').value),product,product?.interest_type);
   $('#appReview').innerHTML=`<div class="card"><h3 style="font-size:14px;margin-bottom:12px">Application Summary</h3>
     <p><strong>Client:</strong> ${client}</p><p><strong>Product:</strong> ${tier}</p>
     <p><strong>Amount:</strong> ${fmtMoney(amt)}</p><p><strong>Total Interest:</strong> ${fmtMoney(calc.totalInterest)}</p>
@@ -3394,7 +3465,7 @@ function buildAppReview(){
     <p><strong>Total Payable:</strong> ${fmtMoney(calc.totalPayable)}</p>
     <p><strong>Loan Form Fee:</strong> ${fmtMoney(LOAN_FORM_FEE)}</p>
     <p><strong>Credit Report Fee:</strong> ${fmtMoney(CREDIT_REPORT_FEE)}</p>
-    <p><strong>Processing Fee:</strong> ${fmtMoney(processingFeeFor(amt, product?.name, Number($('#appTerm').value)))}</p>
+    <p><strong>Processing Fee:</strong> ${fmtMoney(processingFeeFor(amt, product, Number($('#appTerm').value)))}</p>
   </div>`;
 }
 
@@ -3430,9 +3501,8 @@ async function submitApplication(){
     const amt=Number($('#appAmount').value);
     const productId=$('#appProduct')?.value||'';
     const product=(window._appProducts||[]).find(p=>p.id===productId);
-    const productRule=jufinalliesProductByName(product?.name);
-    if(!productId||!productRule) return toast('Select a valid Jufinallies product','warning');
-    if(!jufinalliesPricing(productRule.name,amt,Number($('#appTerm').value))) return toast('Select an approved amount and term for this product','warning');
+    if(!productId||!product) return toast('Select a valid Jufinallies product','warning');
+    if(!calcJufinalliesLoan(amt,Number($('#appTerm').value),product,product.interest_type).valid) return toast('Select an amount and term allowed by this product','warning');
     // Determine loan type: 'new_loan' if this is the client's first ever loan, 'repeat_loan' otherwise
     const{data:prevLoanCheck}=await sb('loans').select('id,loan_officer_id,created_at').eq('client_id',selectedClientId).eq('business_id',currentUser?.business_id).order('created_at',{ascending:false}).limit(1);
     const loanType=(prevLoanCheck&&prevLoanCheck.length>0)?'repeat_loan':'new_loan';
@@ -3505,17 +3575,17 @@ function renderApplicationAssetManager(app){
 }
 
 async function viewApplication(id){
-    const{data:a}=await sb('loan_applications').select('*,loan_clients(id,full_name,phone,id_number,asset_photo_paths),loan_products(name)').eq('id',id).eq('business_id',currentUser.business_id).single();
+    const{data:a}=await sb('loan_applications').select('*,loan_clients(id,full_name,phone,id_number,asset_photo_paths),loan_products(*)').eq('id',id).eq('business_id',currentUser.business_id).single();
   if(!a)return;
-  const product=jufinalliesProductByName(a.loan_products?.name)||getJufinalliesProduct(a.applied_amount);
+  const product=a.loan_products||getJufinalliesProduct(a.applied_amount);
   const tier=product?.name||getAutoTier(a.applied_amount);
   openModal(`
     <h2>Application ${a.application_no||'DRAFT'}</h2>
     <div style="margin-bottom:12px">${statusBadge(a.status)} <span class="badge badge-blue">${tier}</span></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
       <p><strong>Client:</strong> ${escapeHtml(a.loan_clients?.full_name||'-')}</p><p><strong>Phone:</strong> ${escapeHtml(a.loan_clients?.phone||'-')}</p>
-      <p><strong>Amount:</strong> ${fmtMoney(a.applied_amount)}</p><p><strong>Total Interest:</strong> ${fmtMoney(calcJufinalliesLoan(a.applied_amount,a.applied_term_weeks,product?.name).totalInterest)}</p>
-      <p><strong>Payments:</strong> Weekly</p><p><strong>Processing Fee:</strong> ${fmtMoney(processingFeeFor(a.applied_amount,product?.name,a.applied_term_weeks))}</p>
+      <p><strong>Amount:</strong> ${fmtMoney(a.applied_amount)}</p><p><strong>Total Interest:</strong> ${fmtMoney(calcJufinalliesLoan(a.applied_amount,a.applied_term_weeks,product,product?.interest_type).totalInterest)}</p>
+      <p><strong>Payments:</strong> Weekly</p><p><strong>Processing Fee:</strong> ${fmtMoney(processingFeeFor(a.applied_amount,product,a.applied_term_weeks))}</p>
       <p><strong>Term:</strong> ${a.applied_term_weeks} weeks</p><p><strong>Date:</strong> ${fmtDate(a.created_at)}</p>
       <p><strong>Purpose:</strong> ${a.purpose||'-'}</p>
       <p><strong>Guarantor:</strong> ${escapeHtml(a.guarantor_name||'-')} ${a.guarantor_phone?`(${escapeHtml(a.guarantor_phone)})`:''}</p>
@@ -3533,7 +3603,7 @@ async function viewApplication(id){
 }
 
 async function editApplication(id){
-  const{data:a,error}=await sb('loan_applications').select('*,loan_clients(full_name,phone)').eq('id',id).eq('business_id',currentUser.business_id).single();
+  const{data:a,error}=await sb('loan_applications').select('*,loan_clients(full_name,phone),loan_products(*)').eq('id',id).eq('business_id',currentUser.business_id).single();
   if(error||!a)return toast(error?.message||'Application not found','error');
   if(!canManagePendingApplication(a))return toast('Only applications not yet disbursed can be edited','warning');
   openModal(`
@@ -3563,6 +3633,9 @@ async function saveApplicationEdit(id){
   if(!amount||amount<=0)return toast('Enter a valid loan amount','warning');
   if(!term||term<=0)return toast('Enter a valid term','warning');
   try{
+    const{data:application,error:applicationError}=await sb('loan_applications').select('loan_products(*)').eq('id',id).eq('business_id',currentUser.business_id).single();
+    if(applicationError)throw applicationError;
+    if(!calcJufinalliesLoan(amount,term,application?.loan_products,application?.loan_products?.interest_type).valid)return toast('Amount or term is outside the selected product settings','warning');
     const rec={applied_amount:amount,applied_term_weeks:term,purpose:$('#editAppPurpose')?.value||'',guarantor_name:($('#editAppGuarantorName')?.value||'').trim(),guarantor_phone:($('#editAppGuarantorPhone')?.value||'').trim(),guarantor_relationship:($('#editAppGuarantorRel')?.value||'').trim(),updated_at:new Date().toISOString()};
     const{error}=await sb('loan_applications').update(rec).eq('id',id).eq('business_id',currentUser.business_id).not('status','in','(disbursed,rejected)');
     if(error)throw error;
@@ -3652,7 +3725,7 @@ async function rejectApp(id){
 async function renderDisbursement(){
   const main=$('#mainContent');
   try{
-    const{data:apps,error:appsError}=await sb('loan_applications').select('*,loan_clients(full_name,phone,id_number),loan_products(name)').eq('business_id', currentUser.business_id).in('status',['approved','disbursed']).order('approved_at',{ascending:false});
+    const{data:apps,error:appsError}=await sb('loan_applications').select('*,loan_clients(full_name,phone,id_number),loan_products(*)').eq('business_id', currentUser.business_id).in('status',['approved','disbursed']).order('approved_at',{ascending:false});
     if(appsError)throw appsError;
     const appIds=(apps||[]).map(a=>a.id).filter(Boolean);
     let loansByApp={};
@@ -3847,7 +3920,7 @@ async function confirmBulkDisbursement(ids){
     if(!app){failures.push(`Application ${ids[i]}: not found`);continue;}
     if(btn)btn.textContent=`Processing ${i+1} of ${ids.length}...`;
     try{
-      const product=jufinalliesProductByName(app.loan_products?.name)||getJufinalliesProduct(app.applied_amount);
+      const product=app.loan_products||getJufinalliesProduct(app.applied_amount);
       const effectiveDisbDate=historicalOnboarding?(String(app.application_date||'').slice(0,10)||disbDate):disbDate;
       if(!effectiveDisbDate)throw new Error('Application date is missing. Enter it before historical disbursement.');
       if(isFutureDateValue(effectiveDisbDate))throw new Error('Historical application date cannot be in the future.');
@@ -3873,12 +3946,13 @@ async function confirmBulkDisbursement(ids){
 }
 
 async function openDisburseModal(appId){
-  const{data:app}=await sb('loan_applications').select('*,loan_clients(full_name,phone,id_number,notes),loan_products(name)').eq('id',appId).single();
+  const{data:app}=await sb('loan_applications').select('*,loan_clients(full_name,phone,id_number,notes),loan_products(*)').eq('id',appId).single();
   if(!app)return toast('Application not found','error');
   const amt=app.applied_amount;
-  const product=jufinalliesProductByName(app.loan_products?.name)||getJufinalliesProduct(amt);
-  const calc=calcJufinalliesLoan(amt,app.applied_term_weeks,product?.name,'flat');
-  const procFee=processingFeeFor(amt,product?.name,app.applied_term_weeks);
+  const product=app.loan_products||getJufinalliesProduct(amt);
+  const calc=calcJufinalliesLoan(amt,app.applied_term_weeks,product,product?.interest_type);
+  const procFee=processingFeeFor(amt,product,app.applied_term_weeks);
+  if(!calc.valid)return toast('This product is incomplete or the application amount/term is outside its settings. Edit the loan product before disbursement.','error');
   const loanFormFee=LOAN_FORM_FEE;
   const creditReportFee=CREDIT_REPORT_FEE;
   let walletBalance=0;
@@ -3967,15 +4041,16 @@ function updateDisbursementFirstRepayment(intervalWeeks=1){
 
 async function disburseApprovedApplication(options){
     const{appId,clientId,termWeeks}=options;
-    const {data: appCheck} = await sb('loan_applications').select('status,application_date,loan_products(name)').eq('id', appId).single();
+    const {data: appCheck} = await sb('loan_applications').select('status,application_date,loan_products(*)').eq('id', appId).single();
     if(appCheck?.status === 'disbursed') {
         throw new Error('This application has already been disbursed.');
     }
 
     const amt=Number(options.amount);const term=Number(termWeeks);
-    const product=jufinalliesProductByName(appCheck?.loan_products?.name)||getJufinalliesProduct(amt);
-    const c=calcJufinalliesLoan(amt,term,product?.name,'flat');
-    const procFee=processingFeeFor(amt,product?.name,term);
+    const product=appCheck?.loan_products||getJufinalliesProduct(amt);
+    const c=calcJufinalliesLoan(amt,term,product,product?.interest_type);
+    if(!c.valid)throw new Error('This product is incomplete or the approved amount/term is outside its settings.');
+    const procFee=processingFeeFor(amt,product,term);
     const loanFormFee=LOAN_FORM_FEE;
     const creditReportFee=CREDIT_REPORT_FEE;
     const historicalOnboarding=!!options.historicalOnboarding;
@@ -4016,7 +4091,7 @@ async function disburseApprovedApplication(options){
     if(openingBalance>c.totalPayable) throw new Error('Current remaining balance cannot be more than total payable.');
     const openingPaid=Number(Math.max(0,c.totalPayable-openingBalance).toFixed(2));
     const loanStatus=openingBalance<=0?'completed':'active';
-    const loanRec={loan_no:loanNo,application_id:appId,client_id:clientId,loan_officer_id:disbOfficerId,principal_amount:amt,interest_rate:c.periodRate,interest_type:'flat',term_weeks:term,loan_form_fee:loanFormFee,credit_report_fee:creditReportFee,processing_fee:procFee,total_interest:c.totalInterest,total_payable:c.totalPayable,weekly_installment:c.weekly,disbursed_amount:netDisbursement,disbursement_method:options.method,disbursement_reference:options.reference,disbursement_date:disbDate,first_repayment_date:firstRep,maturity_date:localISODate(maturity),status:loanStatus,outstanding_balance:openingBalance,total_paid:openingPaid,arrears_amount:0,overdue_days:0,business_id:currentUser?.business_id,loan_type:disbLoanType,created_at:dateInputToLocalDateTime(disbDate)};
+    const loanRec={loan_no:loanNo,application_id:appId,client_id:clientId,loan_officer_id:disbOfficerId,principal_amount:amt,interest_rate:c.periodRate,interest_type:isFixedJufinalliesProduct(product)?'flat':(product?.interest_type||'flat'),term_weeks:term,loan_form_fee:loanFormFee,credit_report_fee:creditReportFee,processing_fee:procFee,total_interest:c.totalInterest,total_payable:c.totalPayable,weekly_installment:c.weekly,disbursed_amount:netDisbursement,disbursement_method:options.method,disbursement_reference:options.reference,disbursement_date:disbDate,first_repayment_date:firstRep,maturity_date:localISODate(maturity),status:loanStatus,outstanding_balance:openingBalance,total_paid:openingPaid,arrears_amount:0,overdue_days:0,business_id:currentUser?.business_id,loan_type:disbLoanType,created_at:dateInputToLocalDateTime(disbDate)};
 
     // Guard: if loan_type column doesn't exist yet in DB, retry without it
     let{data:loan,error:lErr}=await sb('loans').insert(loanRec).select().single();
@@ -4406,7 +4481,7 @@ let restructureLoanDraft=null;
 async function openRestructureLoanModal(id){
   if(!hasRole('admin','branch_manager'))return toast('Admin or manager access required','warning');
   const[{data:loan,error:loanError},{data:schedules,error:scheduleError},{data:repayments,error:repaymentError},{data:penalties,error:penaltyError}]=await Promise.all([
-    sb('loans').select('*,loan_clients(full_name,phone,id_number),loan_applications(loan_products(name))').eq('id',id).eq('business_id',currentUser.business_id).single(),
+    sb('loans').select('*,loan_clients(full_name,phone,id_number),loan_applications(loan_products(*))').eq('id',id).eq('business_id',currentUser.business_id).single(),
     sb('loan_schedules').select('*').eq('loan_id',id).order('due_date',{ascending:true}).order('installment_no',{ascending:true}),
     sb('loan_repayments').select('amount,principal_portion,interest_portion,penalty_portion').eq('loan_id',id),
     sb('loan_penalties').select('penalty_amount,is_waived').eq('loan_id',id)
@@ -4419,7 +4494,7 @@ async function openRestructureLoanModal(id){
 
   const activeSchedules=(schedules||[]).filter(isCollectibleSchedule);
   const productName=loan.loan_applications?.loan_products?.name||'';
-  const product=jufinalliesProductByName(productName)||getJufinalliesProduct(loan.principal_amount,productName);
+  const product=loan.loan_applications?.loan_products||getJufinalliesProduct(loan.principal_amount,productName);
   let intervalWeeks=Number(product?.paymentEveryWeeks||1);
   if(activeSchedules.length>1){
     const first=parseLocalDate(activeSchedules[0].due_date);
@@ -8911,12 +8986,16 @@ async function deleteStaff(id) {
 async function editStaff(id){const{data:s}=await sb('loan_staff').select('*').eq('id',id).single();if(s)openAddStaffModal(s)}
 
 // ═══ CALCULATOR ═══
-function renderCalculator(){
+async function renderCalculator(){
   const main=$('#mainContent');
-  main.innerHTML=`
+  showLoading(main);
+  try{
+    const products=(await ensureJufinalliesProducts()).filter(p=>p.is_active!==false&&validCustomProduct(p));
+    window._calcProducts=products;
+    main.innerHTML=`
     <div class="page-header"><h1>Loan Calculator</h1></div>
     <div style="max-width:700px">
-      <div class="form-row"><div class="form-group"><label>Product</label><select class="select" id="calcProduct" onchange="updateCalcAmountOptions()">${JUFINALLIES_PRODUCTS.map(p=>`<option value="${p.name}">${p.name}</option>`).join('')}</select></div><div class="form-group"><label>Loan Amount</label><select class="select" id="calcAmt" onchange="updateCalcTermOptions()"></select></div></div>
+      <div class="form-row"><div class="form-group"><label>Product</label><select class="select" id="calcProduct" onchange="updateCalcAmountOptions()">${products.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</select></div><div class="form-group"><label>Loan Amount</label><div id="calcAmountField"><select class="select" id="calcAmt" onchange="updateCalcTermOptions()"></select></div></div></div>
       <div class="form-row"><div class="form-group"><label>Term</label><select class="select" id="calcTerm" onchange="updateCalc()"></select></div><div class="form-group"><label>Repayment Frequency</label><div class="input">Weekly</div></div></div>
       <div class="form-group"><label>Upfront Fees</label><div class="input" style="background:rgba(37,99,235,.06)">Loan form KES 200 + Credit report KES 250 + product processing fee.</div></div>
       <div style="margin-top:8px;font-size:13px;padding:10px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg-card)" id="calcTierDetect"></div>
@@ -8925,45 +9004,56 @@ function renderCalculator(){
       <button class="btn btn-primary" style="margin-top:12px" onclick="navigateTo('applications')">Start Application</button>
     </div>
   `;
-  setTimeout(updateCalcAmountOptions,50);
+    setTimeout(updateCalcAmountOptions,50);
+  }catch(e){main.innerHTML=`<div class="empty-state"><p>${escapeHtml(e.message||'Could not load loan products')}</p></div>`;toast(e.message,'error');}
+}
+
+function selectedCalcProduct(){
+  const id=$('#calcProduct')?.value||'';
+  return (window._calcProducts||[]).find(p=>p.id===id)||null;
 }
 
 function updateCalcAmountOptions(){
-  const productName=$('#calcProduct')?.value||'';
-  const amounts=jufinalliesAmounts(productName);
-  $('#calcAmt').innerHTML=amounts.map(a=>`<option value="${a}">${fmtMoney(a)}</option>`).join('');
+  const product=selectedCalcProduct();
+  const field=$('#calcAmountField');
+  if(!product||!field)return;
+  const amounts=jufinalliesAmounts(product);
+  if(isFixedJufinalliesProduct(product)){
+    field.innerHTML=`<select class="select" id="calcAmt" onchange="updateCalcTermOptions()">${amounts.map(a=>`<option value="${a}">${fmtMoney(a)}</option>`).join('')}</select>`;
+  }else{
+    field.innerHTML=`<input class="input" type="number" id="calcAmt" min="${Number(product.min_amount)}" max="${Number(product.max_amount)}" step="1" value="${Number(product.min_amount)}" oninput="updateCalcTermOptions()">`;
+  }
   updateCalcTermOptions();
 }
 
 function updateCalcTermOptions(){
-  const productName=$('#calcProduct')?.value||'';
+  const product=selectedCalcProduct();
   const amount=Number($('#calcAmt')?.value||0);
-  const terms=jufinalliesTerms(productName,amount);
+  const terms=jufinalliesTerms(product,amount);
   $('#calcTerm').innerHTML=terms.map(t=>`<option value="${t}">${t} weeks</option>`).join('');
   updateCalc();
 }
 
 let lastCalcSchedule=[];
 function updateCalc(){
-  const amt=Number($('#calcAmt')?.value)||0;const productName=$('#calcProduct')?.value||'';const product=getJufinalliesProduct(amt,productName);
+  const amt=Number($('#calcAmt')?.value)||0;const product=selectedCalcProduct();
   const term=Number($('#calcTerm')?.value)||1;
 
   const tierEl=$('#calcTierDetect');
   if(tierEl&&amt>0){
-    const tier=getAutoTier(amt, productName);
-    const rule=jufinalliesPricing(productName,amt,term);
-    tierEl.innerHTML=`<strong>${tier}</strong> | Loan form: <strong>${fmtMoney(LOAN_FORM_FEE)}</strong> | Credit report: <strong>${fmtMoney(CREDIT_REPORT_FEE)}</strong> | Processing: <strong>${fmtMoney(rule?.processingFee||0)}</strong>`;
+    const tier=getAutoTier(amt, product);
+    tierEl.innerHTML=`<strong>${tier}</strong> | Loan form: <strong>${fmtMoney(LOAN_FORM_FEE)}</strong> | Credit report: <strong>${fmtMoney(CREDIT_REPORT_FEE)}</strong> | Processing: <strong>${fmtMoney(processingFeeFor(amt,product,term))}</strong>`;
     tierEl.style.display='block';
   }
 
-  const c=calcJufinalliesLoan(amt,term,productName,'flat');
+  const c=calcJufinalliesLoan(amt,term,product,product?.interest_type);
   lastCalcSchedule=c.schedule;
   const el=$('#calcResults');if(!el)return;
   el.innerHTML=`
     <div class="kpi-grid" style="margin-bottom:16px">
       <div class="kpi-card"><div class="kpi-label">${c.installmentLabel}</div><div class="kpi-value" style="color:var(--accent-blue)">${fmtMoney(c.weekly)}</div></div>
       <div class="kpi-card"><div class="kpi-label">Total Interest</div><div class="kpi-value" style="color:var(--accent-yellow)">${fmtMoney(c.totalInterest)}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Upfront Fees</div><div class="kpi-value">${fmtMoney(LOAN_FORM_FEE+CREDIT_REPORT_FEE+processingFeeFor(amt,productName,term))}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Upfront Fees</div><div class="kpi-value">${fmtMoney(LOAN_FORM_FEE+CREDIT_REPORT_FEE+processingFeeFor(amt,product,term))}</div></div>
       <div class="kpi-card"><div class="kpi-label">Total Payable</div><div class="kpi-value" style="color:var(--accent-red)">${fmtMoney(c.totalPayable)}</div></div>
     </div>
     <div class="table-wrap"><table><thead><tr><th>#</th><th>Principal</th><th>Interest</th><th>Installment</th><th>Balance</th></tr></thead><tbody>
