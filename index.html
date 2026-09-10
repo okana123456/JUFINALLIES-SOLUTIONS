@@ -1122,7 +1122,8 @@ const JUFINALLIES_PRODUCTS = [
   {key:'inuka',name:'INUKA',min:6000,max:10000,description:'KES 6,000-10,000 | fixed 4, 6 or 8 week plans'},
   {key:'jifungie',name:'JIFUNGIE',min:11000,max:15000,description:'KES 11,000-15,000 | fixed 4, 6 or 8 week plans'},
   {key:'jitegemee',name:'JITEGEMEE',min:16000,max:20000,description:'KES 16,000-20,000 | fixed 4, 6 or 8 week plans'},
-  {key:'nawiri',name:'NAWIRI',min:21000,max:30000,description:'KES 21,000-30,000 | fixed 6 week plans'}
+  {key:'nawiri',name:'NAWIRI',min:21000,max:30000,description:'KES 21,000-30,000 | fixed 6 week plans'},
+  {key:'mavuno',name:'MAVUNO',min:50000,max:50000,description:'KES 50,000 | fixed 6 week plan'}
 ];
 
 // The approved product sheet is the single source of truth for fees and loan maths.
@@ -1147,7 +1148,8 @@ const JUFINALLIES_PRICING = [
   ['NAWIRI',21000,2230,6,7350,28350,4725],['NAWIRI',22000,2300,6,7700,29700,4950],['NAWIRI',23000,2390,6,8050,31050,5175],
   ['NAWIRI',24000,2470,6,8400,32400,5400],['NAWIRI',25000,2550,6,8750,33750,5625],['NAWIRI',26000,2630,6,9100,35100,5850],
   ['NAWIRI',27000,2710,6,9450,36450,6075],['NAWIRI',28000,2790,6,9800,37800,6300],['NAWIRI',29000,2870,6,10150,39150,6525],
-  ['NAWIRI',30000,2950,6,10500,40500,6750]
+  ['NAWIRI',30000,2950,6,10500,40500,6750],
+  ['MAVUNO',50000,4500,6,17500,67500,11250]
 ].map(([product,amount,processingFee,termWeeks,totalInterest,totalPayable,sheetWeekly])=>({product,amount,processingFee,termWeeks,totalInterest,totalPayable,sheetWeekly}));
 
 function jufinalliesProductByName(name){
@@ -1213,7 +1215,10 @@ function getAutoTier(amount, productRef=''){
 }
 function jufinalliesFeeLabel(product){
   if(!product) return 'No matching product';
-  if(isFixedJufinalliesProduct(product))return 'Processing fee';
+  if(isFixedJufinalliesProduct(product)){
+    const fees=[...new Set(JUFINALLIES_PRICING.filter(r=>r.product===String(product.name||'').toUpperCase()).map(r=>Number(r.processingFee||0)))];
+    return fees.length===1?`${fmtMoney(fees[0])} fixed application fee`:'Fixed by loan amount';
+  }
   return `${Number(product.processing_fee_pct||0)}% processing fee`;
 }
 function jufinalliesFeeName(product){
@@ -3113,6 +3118,7 @@ async function renderProducts(){
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
       ${(products||[]).map(p=>{
         const fixed=isFixedJufinalliesProduct(p);
+        const fixedDefinition=fixed?jufinalliesProductByName(p.name):null;
         const terms=fixed?[...new Set(JUFINALLIES_PRICING.filter(r=>r.product===String(p.name||'').toUpperCase()).map(r=>r.termWeeks))]:jufinalliesTerms(p);
         const needsSetup=!fixed&&!validCustomProduct(p);
         return `
@@ -3121,9 +3127,9 @@ async function renderProducts(){
             <div><strong style="font-size:16px">${p.name}</strong></div>
             ${p.is_active&&!needsSetup?'<span class="badge badge-green">Active</span>':needsSetup?'<span class="badge badge-red">Needs setup</span>':'<span class="badge badge-gray">Inactive</span>'}
           </div>
-          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">${p.description||jufinalliesProductByName(p.name)?.description||'No description'}</p>
+          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">${fixedDefinition?.description||p.description||'No description'}</p>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
-            <div><span style="color:var(--text-secondary)">Amount:</span> ${fmtMoney(p.min_amount)} - ${fmtMoney(p.max_amount)}</div>
+            <div><span style="color:var(--text-secondary)">Amount:</span> ${fmtMoney(fixedDefinition?.min??p.min_amount)}${Number(fixedDefinition?.max??p.max_amount)!==Number(fixedDefinition?.min??p.min_amount)?` - ${fmtMoney(fixedDefinition?.max??p.max_amount)}`:''}</div>
             <div><span style="color:var(--text-secondary)">Plans:</span> ${terms.length?(fixed?terms.join(', '):`${terms[0]}${terms.length>1?' - '+terms[terms.length-1]:''}`):'Not configured'} weeks</div>
             <div><span style="color:var(--text-secondary)">Payments:</span> Weekly</div>
             <div><span style="color:var(--text-secondary)">Fixed Fees:</span> ${fmtMoney(LOAN_FORM_FEE+CREDIT_REPORT_FEE)} + processing</div>
