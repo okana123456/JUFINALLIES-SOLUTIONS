@@ -367,7 +367,7 @@ tr:hover{background:rgba(37,99,235,.04)}
 
 <script>
 // ═══ SUPABASE INIT ═══
-const APP_VERSION = 'jufinallies-2026-08-27-october-billing-v2';
+const APP_VERSION = 'jufinallies-2026-10-02-billing-confirmation-v3';
 const SUPABASE_URL = 'https://iemucoenarynzybowciu.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImllbXVjb2VuYXJ5bnp5Ym93Y2l1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4MTgyNTUsImV4cCI6MjEwMzM5NDI1NX0.tMRFRXn9aRROrugZ2RsefipgWeArh3tvlL7CcuaG7kU';
 // Added custom storageKey to prevent GoTrue orphaned lock hanging in the browser.
@@ -961,27 +961,35 @@ async function loadServiceBillingStatus({silent=false}={}){
   const day = new Date().getDate();
   try{
     const { data, error } = await sb('loan_billing_cycles')
-      .select('status,paid_at,paid_until,receipt_number,phone')
+      .select('billing_month,status,paid_at,paid_until,receipt_number,phone')
       .eq('business_id', currentUser.business_id)
-      .eq('billing_month', month)
-      .maybeSingle();
+      .order('billing_month',{ascending:false})
+      .limit(12);
     if(error) throw error;
-    const paid = !!data && data.status === 'paid' && (!data.paid_until || data.paid_until >= todayStr);
+    const rows=data||[];
+    const currentRow=rows.find(row=>String(row.billing_month||'').slice(0,10)===month)||null;
+    const coveringPaidRow=rows.find(row=>row.status==='paid'&&(
+      (row.paid_until&&String(row.paid_until).slice(0,10)>=todayStr)
+      ||(!row.paid_until&&String(row.billing_month||'').slice(0,10)===month)
+    ))||null;
+    const paid=!!coveringPaidRow;
+    const displayRow=coveringPaidRow||currentRow;
     setServiceBillingState({
-      status: data?.status || 'pending',
+      status: displayRow?.status || 'pending',
       paid,
       locked: !paid && day >= SERVICE_BILLING_LOCK_DAY,
       reminder: !paid && day >= SERVICE_BILLING_REMINDER_DAY,
-      pending: data?.status === 'initiated',
+      pending: currentRow?.status === 'initiated',
       cycleMonth: month,
-      row: data || null
+      row: displayRow || null
     });
   }catch(e){
     loadCachedServiceBilling();
-    const dayNow = new Date().getDate();
-    if(!serviceBilling.paid){
-      serviceBilling.locked = dayNow >= SERVICE_BILLING_LOCK_DAY;
-      serviceBilling.reminder = dayNow >= SERVICE_BILLING_REMINDER_DAY;
+    const cachedUntil=String(serviceBilling.row?.paid_until||'').slice(0,10);
+    const cachedPaid=serviceBilling.paid&&(!cachedUntil||cachedUntil>=todayStr);
+    if(!cachedPaid){
+      // A temporary read failure must not show an unverified payment demand.
+      serviceBilling={...serviceBilling,status:'unknown',paid:false,locked:false,reminder:false,pending:false};
     }
     if(!silent) toast('Could not check subscription status: '+e.message, 'warning');
   }
@@ -1051,6 +1059,16 @@ async function startServiceBillingPayment(btn){
     });
     if(error) throw error;
     if(!data?.ok) throw new Error(data?.message || 'Payment prompt failed');
+    if(data.already_paid){
+      setServiceBillingState({
+        paid:true,locked:false,reminder:false,pending:false,status:'paid',
+        row:{...(serviceBilling.row||{}),paid_until:data.paid_until||serviceBilling.row?.paid_until,receipt_number:data.receipt_number||serviceBilling.row?.receipt_number}
+      });
+      localStorage.removeItem(serviceBillingMinKey());
+      removeServiceBillingOverlay();
+      toast('Subscription payment is already confirmed.','success');
+      return;
+    }
     setServiceBillingState({ pending:true, status:'initiated', row:{ ...(serviceBilling.row||{}), phone } });
     renderServiceBillingOverlay();
     toast('Payment prompt sent. Complete it on the phone, then click Check payment.', 'success');
@@ -1684,8 +1702,8 @@ function showApp(){
       else navigateTo('calculator');
   }
 
-  loadCachedServiceBilling();
-  renderServiceBillingOverlay();
+  // Never flash a stale unpaid reminder before the database check completes.
+  removeServiceBillingOverlay();
   loadServiceBillingStatus({ silent:true });
   setTimeout(applyRolloverPenalties,2000);
 }

@@ -32,8 +32,7 @@ function env(name: string) {
 }
 
 function billingMonth() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+  return `${kenyaISODate().slice(0, 7)}-01`;
 }
 
 function kenyaISODate() {
@@ -87,6 +86,30 @@ serve(async (req) => {
       .maybeSingle();
     if (!staff?.is_active || !["admin", "branch_manager"].includes(staff.role)) {
       return json({ ok: false, message: "Only admins can renew the system subscription." }, 403);
+    }
+
+    const currentMonth = billingMonth();
+    const today = kenyaISODate();
+    const { data: existingCycles, error: existingCycleError } = await supabase
+      .from("loan_billing_cycles")
+      .select("billing_month,status,paid_until,receipt_number")
+      .eq("business_id", staff.business_id)
+      .eq("status", "paid")
+      .order("billing_month", { ascending: false })
+      .limit(12);
+    if (existingCycleError) return json({ ok: false, message: existingCycleError.message }, 500);
+    const activePaidCycle = (existingCycles || []).find((cycle) =>
+      (cycle.paid_until && String(cycle.paid_until).slice(0, 10) >= today)
+      || (!cycle.paid_until && String(cycle.billing_month).slice(0, 10) === currentMonth)
+    );
+    if (activePaidCycle) {
+      return json({
+        ok: true,
+        already_paid: true,
+        message: "This subscription period is already paid.",
+        paid_until: activePaidCycle.paid_until,
+        receipt_number: activePaidCycle.receipt_number,
+      });
     }
 
     const amount = Math.max(1, Number(Deno.env.get("SERVICE_BILLING_AMOUNT") || 3000));
@@ -146,7 +169,7 @@ serve(async (req) => {
 
     const cycle = {
       business_id: staff.business_id,
-      billing_month: billingMonth(),
+      billing_month: currentMonth,
       amount,
       status: "initiated",
       phone: cleanPhone,

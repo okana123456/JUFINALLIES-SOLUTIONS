@@ -52,6 +52,11 @@ serve(async (req) => {
       .maybeSingle();
     if (!cycle) return response();
 
+    // Safaricom may retry the same callback. A completed cycle is immutable.
+    if (cycle.status === "paid" && cycle.paid_at && cycle.receipt_number) {
+      return response();
+    }
+
     if (resultCode !== "0") {
       await supabase
         .from("loan_billing_cycles")
